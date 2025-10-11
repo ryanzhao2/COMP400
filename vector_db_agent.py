@@ -9,6 +9,10 @@ import json
 from typing import Dict, List, Any, TypedDict, Optional
 from dataclasses import dataclass
 import numpy as np
+from dotenv import load_dotenv
+
+# Load environment variables from .env if present
+load_dotenv()
 
 # FAISS imports
 try:
@@ -18,8 +22,18 @@ except ImportError:
 
 # LangGraph imports
 from langgraph.graph import StateGraph, END
-from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate
+try:
+    import google.genai as genai  # type: ignore
+except Exception:  # pragma: no cover
+    genai = None  # type: ignore
+try:
+    from langchain_google_genai import ChatGoogleGenerativeAI  # type: ignore
+    from langchain_core.messages import SystemMessage, HumanMessage
+except Exception:
+    ChatGoogleGenerativeAI = None  # type: ignore
+    SystemMessage = None  # type: ignore
+    HumanMessage = None  # type: ignore
+from langchain_core.messages import SystemMessage, HumanMessage
 
 # Configuration
 @dataclass
@@ -39,6 +53,115 @@ class PerformanceThresholds:
     max_latency_ms: float = 100.0
     max_memory_gb: float = 8.0
     max_experiments: int = 20
+
+@dataclass
+class DistanceStats:
+    """Summary statistics of vector distances in the graph/index."""
+    mean: float
+    std: float
+    minimum: float
+    maximum: float
+    p25: float
+    p50: float
+    p75: float
+
+@dataclass
+class TrialRecord:
+    """Single trial observed in the graph with params, metrics, and distance stats."""
+    params: Dict[str, int]
+    metrics: Dict[str, float]
+    distance_stats: DistanceStats
+
+@dataclass
+class GraphData:
+    """External graph data to inform LLM recommendations."""
+    dataset_size: int
+    dimension: int
+    global_distance_stats: DistanceStats
+    trials: List[TrialRecord]
+
+# -------- JSON I/O helpers for GraphData --------
+def graph_data_to_dict(graph: "GraphData") -> Dict[str, Any]:
+    return {
+        "dataset_size": graph.dataset_size,
+        "dimension": graph.dimension,
+        "global_distance_stats": {
+            "mean": graph.global_distance_stats.mean,
+            "std": graph.global_distance_stats.std,
+            "minimum": graph.global_distance_stats.minimum,
+            "maximum": graph.global_distance_stats.maximum,
+            "p25": graph.global_distance_stats.p25,
+            "p50": graph.global_distance_stats.p50,
+            "p75": graph.global_distance_stats.p75,
+        },
+        "trials": [
+            {
+                "params": t.params,
+                "metrics": t.metrics,
+                "distance_stats": {
+                    "mean": t.distance_stats.mean,
+                    "std": t.distance_stats.std,
+                    "minimum": t.distance_stats.minimum,
+                    "maximum": t.distance_stats.maximum,
+                    "p25": t.distance_stats.p25,
+                    "p50": t.distance_stats.p50,
+                    "p75": t.distance_stats.p75,
+                },
+            }
+            for t in graph.trials
+        ],
+    }
+
+
+def graph_data_from_dict(d: Dict[str, Any]) -> "GraphData":
+    gstats = d.get("global_distance_stats", {})
+    global_stats = DistanceStats(
+        mean=float(gstats.get("mean", 0.0)),
+        std=float(gstats.get("std", 0.0)),
+        minimum=float(gstats.get("minimum", 0.0)),
+        maximum=float(gstats.get("maximum", 0.0)),
+        p25=float(gstats.get("p25", 0.0)),
+        p50=float(gstats.get("p50", 0.0)),
+        p75=float(gstats.get("p75", 0.0)),
+    )
+
+    trials: List[TrialRecord] = []
+    for td in d.get("trials", []):
+        dstats_raw = td.get("distance_stats", {})
+        dstats = DistanceStats(
+            mean=float(dstats_raw.get("mean", 0.0)),
+            std=float(dstats_raw.get("std", 0.0)),
+            minimum=float(dstats_raw.get("minimum", 0.0)),
+            maximum=float(dstats_raw.get("maximum", 0.0)),
+            p25=float(dstats_raw.get("p25", 0.0)),
+            p50=float(dstats_raw.get("p50", 0.0)),
+            p75=float(dstats_raw.get("p75", 0.0)),
+        )
+        trials.append(
+            TrialRecord(
+                params={k: int(v) for k, v in td.get("params", {}).items()},
+                metrics={k: float(v) for k, v in td.get("metrics", {}).items()},
+                distance_stats=dstats,
+            )
+        )
+
+    return GraphData(
+        dataset_size=int(d.get("dataset_size", 0)),
+        dimension=int(d.get("dimension", 0)),
+        global_distance_stats=global_stats,
+        trials=trials,
+    )
+
+
+def save_graph_data_json(graph: "GraphData", path: str) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(graph_data_to_dict(graph), f, indent=2)
+
+
+def load_graph_data_json(path: str) -> "GraphData":
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return graph_data_from_dict(data)
 
 # State definition
 class OptimizationState(TypedDict):
@@ -61,14 +184,28 @@ class VectorDatabaseAgent:
                  constraints: Optional[ParameterConstraints] = None,
                  thresholds: Optional[PerformanceThresholds] = None):
         
-        # Set up LLM (optional)
-        self.llm = None
-        if openai_api_key or os.getenv("OPENAI_API_KEY"):
-            self.llm = ChatOpenAI(
-                model="gpt-4o-mini",
-                temperature=0.1,
-                api_key=openai_api_key or os.getenv("OPENAI_API_KEY")
-            )
+        # Set up LLMs (prefer LangChain wrapper, fallback to google-genai client)
+        self.genai_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        gemini_key = os.getenv("GEMINI_API_KEY")
+        self.lc_llm = None
+        self.genai_client = None
+        if gemini_key and ChatGoogleGenerativeAI is not None:
+            try:
+                # Ensure LangChain sees the key
+                if not os.getenv("GOOGLE_API_KEY"):
+                    os.environ["GOOGLE_API_KEY"] = gemini_key
+                try:
+                    self.lc_llm = ChatGoogleGenerativeAI(model=self.genai_model, temperature=0.1, google_api_key=gemini_key)
+                except Exception:
+                    # Fallback to a widely available model name
+                    self.lc_llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro", temperature=0.1, google_api_key=gemini_key)
+            except Exception as e:
+                print(f"⚠️  Failed to initialize LangChain Gemini: {e}. Will try direct client.")
+        if gemini_key and self.lc_llm is None and genai is not None:
+            try:
+                self.genai_client = genai.Client(api_key=gemini_key)
+            except Exception as e:
+                print(f"⚠️  Failed to initialize Google GenAI client: {e}. Using heuristic fallback.")
         
         # Set up constraints and thresholds
         self.constraints = constraints or ParameterConstraints()
@@ -77,7 +214,7 @@ class VectorDatabaseAgent:
         # Build the workflow
         self.workflow = self._build_workflow()
     
-    def _build_workflow(self) -> StateGraph:
+    def _build_workflow(self) -> Any:
         """Build the LangGraph workflow"""
         workflow = StateGraph(OptimizationState)
         
@@ -132,7 +269,7 @@ class VectorDatabaseAgent:
         print("🧠 Generating parameters...")
         
         # Use LLM if available, otherwise use fallback
-        if self.llm:
+        if self.lc_llm or self.genai_client:
             state["current_params"] = self._generate_llm_parameters(state)
         else:
             state["current_params"] = self._generate_fallback_parameters(state)
@@ -156,7 +293,7 @@ class VectorDatabaseAgent:
             
             # Generate sample data
             vectors = np.random.random((dataset_size, dimension)).astype(np.float32)
-            index.add(vectors)
+            index.add(vectors)  # type: ignore
             
             print(f"✅ Index built with {dataset_size} vectors")
             
@@ -182,7 +319,7 @@ class VectorDatabaseAgent:
             index.hnsw.efSearch = params["ef_search"]
             
             vectors = np.random.random((dataset_size, dimension)).astype(np.float32)
-            index.add(vectors)
+            index.add(vectors)  # type: ignore
             
             # Generate test queries
             num_queries = 100
@@ -190,7 +327,7 @@ class VectorDatabaseAgent:
             
             # Measure performance
             start_time = time.time()
-            distances, indices = index.search(queries, k=10)
+            distances, indices = index.search(queries, k=10)  # type: ignore
             search_time = (time.time() - start_time) * 1000
             
             # Calculate metrics
@@ -272,17 +409,163 @@ class VectorDatabaseAgent:
     # Helper methods
     def _generate_llm_parameters(self, state: OptimizationState) -> Dict[str, int]:
         """Generate parameters using LLM"""
-        # Implementation for LLM-based parameter generation
-        # This would use the LLM to reason about optimal parameters
-        return self._generate_fallback_parameters(state)
-    
+        # If no LLM available, fallback
+        if not (self.lc_llm or self.genai_client):
+            return self._generate_fallback_parameters(state)
+        # Build a single plain-text prompt
+        prompt_text = (
+            "You are an expert on FAISS HNSW parameter tuning. Propose parameters to maximize recall while respecting latency and memory targets.\n\n"
+            "Constraints:\n"
+            f"- hnsw_m: {self.constraints.hnsw_m_min}-{self.constraints.hnsw_m_max}\n"
+            f"- ef_construction: {self.constraints.ef_construction_min}-{self.constraints.ef_construction_max}\n"
+            f"- ef_search: {self.constraints.ef_search_min}-{self.constraints.ef_search_max}\n\n"
+            "Targets:\n"
+            f"- min_recall: {self.thresholds.min_recall}\n"
+            f"- max_latency_ms: {self.thresholds.max_latency_ms}\n"
+            f"- max_memory_gb: {self.thresholds.max_memory_gb}\n\n"
+            "Context:\n"
+            f"- dataset_size: {state.get('dataset_size')}\n"
+            f"- dimension: {state.get('dimension')}\n"
+            f"- last_params: {json.dumps(state.get('current_params', {}))}\n"
+            f"- last_metrics: {json.dumps(state.get('current_metrics', {}))}\n\n"
+            "Return ONLY compact JSON with keys hnsw_m, ef_construction, ef_search, rationale."
+        )
+
+        try:
+            if self.lc_llm is not None and SystemMessage is not None and HumanMessage is not None:
+                system = SystemMessage(content="You are an expert on FAISS HNSW parameter tuning. Respond in strict JSON.")
+                user = HumanMessage(content=prompt_text)
+                lc_resp = self.lc_llm.invoke([system, user])
+                content = getattr(lc_resp, "content", "")
+            else:
+                assert self.genai_client is not None
+                response = self.genai_client.models.generate_content(model=self.genai_model, contents=prompt_text)
+                content = getattr(response, "text", "")
+            # Try strict JSON parse, otherwise extract braces
+            try:
+                parsed = json.loads(content)
+            except Exception:
+                start = content.find("{")
+                end = content.rfind("}")
+                parsed = json.loads(content[start:end+1]) if start != -1 and end != -1 else {}
+
+            params = {
+                "hnsw_m": int(parsed.get("hnsw_m", 16)),
+                "ef_construction": int(parsed.get("ef_construction", 200)),
+                "ef_search": int(parsed.get("ef_search", 50)),
+            }
+            return self._validate_parameters(params)
+        except Exception:
+            return self._generate_fallback_parameters(state)
+
+    def recommend_parameters_from_graph(self, graph_data: "GraphData") -> Dict[str, Any]:
+        """Use LLM (or heuristic) to recommend params from external graph data.
+
+        Returns a dict with: params, rationale, considered_trials
+        """
+        # If no LLM, use a simple heuristic: increase ef_search when distances are tight
+        if not (self.lc_llm or self.genai_client):
+            heuristic_m = min(max(16, int(graph_data.dimension // 8)), self.constraints.hnsw_m_max)
+            # If nearest distances are small (dense space), favor higher ef_search
+            tight_space = graph_data.global_distance_stats.p50 < 0.5
+            ef_search = 200 if tight_space else 100
+            ef_construction = 400 if tight_space else 200
+            params = self._validate_parameters({
+                "hnsw_m": heuristic_m,
+                "ef_construction": ef_construction,
+                "ef_search": ef_search,
+            })
+            return {"params": params, "rationale": "Heuristic recommendation without LLM.", "considered_trials": len(graph_data.trials)}
+
+        # Build a compact JSON payload for the LLM
+        def serialize_distance(d: DistanceStats) -> Dict[str, float]:
+            return {
+                "mean": d.mean,
+                "std": d.std,
+                "min": d.minimum,
+                "max": d.maximum,
+                "p25": d.p25,
+                "p50": d.p50,
+                "p75": d.p75,
+            }
+
+        trials_payload = []
+        for t in graph_data.trials[:20]:  # limit to first 20 for brevity
+            trials_payload.append({
+                "params": t.params,
+                "metrics": t.metrics,
+                "distance_stats": serialize_distance(t.distance_stats),
+            })
+
+        payload = {
+            "dataset_size": graph_data.dataset_size,
+            "dimension": graph_data.dimension,
+            "global_distance_stats": serialize_distance(graph_data.global_distance_stats),
+            "trials": trials_payload,
+            "constraints": {
+                "hnsw_m": [self.constraints.hnsw_m_min, self.constraints.hnsw_m_max],
+                "ef_construction": [self.constraints.ef_construction_min, self.constraints.ef_construction_max],
+                "ef_search": [self.constraints.ef_search_min, self.constraints.ef_search_max],
+            },
+            "targets": {
+                "min_recall": self.thresholds.min_recall,
+                "max_latency_ms": self.thresholds.max_latency_ms,
+                "max_memory_gb": self.thresholds.max_memory_gb,
+            },
+        }
+
+        prompt_text = (
+            "You are an expert on FAISS HNSW for vector search. Recommend parameters that maximize recall while respecting latency and memory targets. Always respond with strict JSON.\n\n"
+            "Here is graph data and constraints as JSON. Return JSON with keys: hnsw_m, ef_construction, ef_search, rationale.\n"
+            + json.dumps(payload)
+        )
+
+        try:
+            if self.lc_llm is not None and SystemMessage is not None and HumanMessage is not None:
+                system = SystemMessage(content="You are an expert on FAISS HNSW. Respond in strict JSON.")
+                user = HumanMessage(content=prompt_text)
+                lc_resp = self.lc_llm.invoke([system, user])
+                content = getattr(lc_resp, "content", "")
+            else:
+                assert self.genai_client is not None
+                response = self.genai_client.models.generate_content(model=self.genai_model, contents=prompt_text)
+                content = getattr(response, "text", "")
+            try:
+                parsed = json.loads(content)
+            except Exception:
+                start = content.find("{")
+                end = content.rfind("}")
+                parsed = json.loads(content[start:end+1]) if start != -1 and end != -1 else {}
+
+            params = self._validate_parameters({
+                "hnsw_m": int(parsed.get("hnsw_m", 16)),
+                "ef_construction": int(parsed.get("ef_construction", 200)),
+                "ef_search": int(parsed.get("ef_search", 50)),
+            })
+            rationale = parsed.get("rationale", "")
+            return {"params": params, "rationale": rationale, "considered_trials": len(trials_payload)}
+        except Exception as e:
+            # Fallback to heuristic if parsing/LLM fails
+            heuristic_m = min(max(16, int(graph_data.dimension // 8)), self.constraints.hnsw_m_max)
+            tight_space = graph_data.global_distance_stats.p50 < 0.5
+            ef_search = 200 if tight_space else 100
+            ef_construction = 400 if tight_space else 200
+            params = self._validate_parameters({
+                "hnsw_m": heuristic_m,
+                "ef_construction": ef_construction,
+                "ef_search": ef_search,
+            })
+            return {"params": params, "rationale": "Heuristic fallback due to LLM error.", "considered_trials": len(graph_data.trials)}
+
+    def recommend_parameters_from_json_file(self, json_path: str) -> Dict[str, Any]:
+        """Load graph data from JSON and return a recommendation."""
+        graph = load_graph_data_json(json_path)
+        return self.recommend_parameters_from_graph(graph)
+
     def _generate_fallback_parameters(self, state: OptimizationState) -> Dict[str, int]:
         """Generate fallback parameters"""
         import random
-        
         iteration = state["iteration_count"]
-        
-        # Simple parameter exploration
         if iteration == 0:
             hnsw_m, ef_construction, ef_search = 16, 200, 50
         elif iteration == 1:
@@ -293,58 +576,50 @@ class VectorDatabaseAgent:
             hnsw_m = random.randint(self.constraints.hnsw_m_min, self.constraints.hnsw_m_max)
             ef_construction = random.randint(self.constraints.ef_construction_min, self.constraints.ef_construction_max)
             ef_search = random.randint(self.constraints.ef_search_min, self.constraints.ef_search_max)
-        
         params = {
             "hnsw_m": hnsw_m,
             "ef_construction": ef_construction,
             "ef_search": ef_search
         }
-        
         return self._validate_parameters(params)
-    
+
     def _validate_parameters(self, params: Dict[str, int]) -> Dict[str, int]:
         """Validate and clamp parameters"""
         validated = {}
-        validated["hnsw_m"] = max(self.constraints.hnsw_m_min, 
-                                 min(self.constraints.hnsw_m_max, params.get("hnsw_m", 16)))
+        validated["hnsw_m"] = max(self.constraints.hnsw_m_min,
+                                   min(self.constraints.hnsw_m_max, params.get("hnsw_m", 16)))
         validated["ef_construction"] = max(self.constraints.ef_construction_min,
-                                         min(self.constraints.ef_construction_max, 
-                                             params.get("ef_construction", 200)))
+                                            min(self.constraints.ef_construction_max,
+                                                params.get("ef_construction", 200)))
         validated["ef_search"] = max(self.constraints.ef_search_min,
-                                   min(self.constraints.ef_search_max, 
-                                       params.get("ef_search", 50)))
+                                      min(self.constraints.ef_search_max,
+                                          params.get("ef_search", 50)))
         return validated
-    
+
     def _is_better_config(self, current: Dict[str, float], best: Dict[str, float]) -> bool:
         """Determine if current configuration is better"""
         if not best:
             return True
-        
-        # Multi-objective optimization
-        if current["recall"] > best["recall"]:
+        if current["recall"] > best.get("recall", -1.0):
             return True
-        elif current["recall"] == best["recall"]:
-            if current["latency_ms"] < best["latency_ms"]:
+        elif current["recall"] == best.get("recall", -1.0):
+            if current["latency_ms"] < best.get("latency_ms", float("inf")):
                 return True
-            elif current["latency_ms"] == best["latency_ms"]:
-                return current["memory_gb"] < best["memory_gb"]
+            elif current["latency_ms"] == best.get("latency_ms", float("inf")):
+                return current["memory_gb"] < best.get("memory_gb", float("inf"))
         return False
-    
+
     def _should_continue(self, state: OptimizationState) -> str:
         """Determine the next step"""
         if state["status"] == "done":
             return "done"
         else:
             return "continue"
-    
+
     def optimize(self, max_iterations: int = 10) -> Dict[str, Any]:
         """Run the optimization workflow"""
         print("🚀 Starting vector database optimization...")
-        
-        # Update max experiments
         self.thresholds.max_experiments = max_iterations
-        
-        # Initial state
         initial_state = OptimizationState(
             dataset_size=0,
             dimension=0,
@@ -356,19 +631,74 @@ class VectorDatabaseAgent:
             status="analyzing",
             error_message=None
         )
-        
-        # Run the workflow
         final_state = self.workflow.invoke(initial_state)
-        
         print(f"🏁 Optimization completed")
         print(f"📊 Total experiments: {final_state['iteration_count']}")
-        
         if final_state["best_config"]:
             print(f"🎯 Best configuration:")
             print(f"   Parameters: {final_state['best_config']['params']}")
             print(f"   Metrics: {final_state['best_config']['metrics']}")
-        
         return final_state
+
+
+def generate_dummy_graph_data(dataset_size: int = 5000, dimension: int = 128, num_trials: int = 6) -> GraphData:
+    """Create dummy graph data with plausible distance stats and trial outcomes."""
+    # Simulate a random dataset and compute simple distance summaries on a small sample
+    sample_vectors = np.random.random((min(dataset_size, 2000), dimension)).astype(np.float32)
+
+    # Approximate pairwise distances for a subset of samples
+    sample = sample_vectors[:256]
+    # Compute dot products and derive cosine-like distances for simplicity
+    norms = np.linalg.norm(sample, axis=1, keepdims=True) + 1e-9
+    normalized = sample / norms
+    sims = normalized @ normalized.T
+    dists = 1.0 - sims  # pseudo cosine distance
+    # Use upper triangle values excluding diagonal
+    iu = np.triu_indices_from(dists, k=1)
+    values = dists[iu]
+
+    def summarize(arr: np.ndarray) -> DistanceStats:
+        qs = np.quantile(arr, [0.25, 0.5, 0.75])
+        return DistanceStats(
+            mean=float(np.mean(arr)),
+            std=float(np.std(arr)),
+            minimum=float(np.min(arr)),
+            maximum=float(np.max(arr)),
+            p25=float(qs[0]),
+            p50=float(qs[1]),
+            p75=float(qs[2]),
+        )
+
+    global_stats = summarize(values)
+
+    # Create a few synthetic trials with metrics correlated to ef_search
+    trials: List[TrialRecord] = []
+    preset_params = [
+        {"hnsw_m": 16, "ef_construction": 200, "ef_search": 50},
+        {"hnsw_m": 32, "ef_construction": 400, "ef_search": 100},
+        {"hnsw_m": 8,  "ef_construction": 100, "ef_search": 20},
+    ]
+    while len(preset_params) < num_trials:
+        preset_params.append({
+            "hnsw_m": int(np.random.randint(8, 48)),
+            "ef_construction": int(np.random.randint(100, 800)),
+            "ef_search": int(np.random.randint(20, 400)),
+        })
+
+    for p in preset_params[:num_trials]:
+        # Synthetic metrics
+        recall = float(min(0.98, 0.6 + (p["ef_search"] / 1000.0) * 0.35))
+        latency_ms = float(max(2.0, 1.0 + p["ef_search"] * 0.15))
+        memory_gb = float((dataset_size * dimension * 4) / (1024**3))
+        metrics = {"recall": recall, "latency_ms": latency_ms, "memory_gb": memory_gb}
+        trials.append(TrialRecord(params=p, metrics=metrics, distance_stats=global_stats))
+
+    return GraphData(
+        dataset_size=dataset_size,
+        dimension=dimension,
+        global_distance_stats=global_stats,
+        trials=trials,
+    )
 
 # Example usage
 def main():

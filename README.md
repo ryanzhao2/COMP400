@@ -27,13 +27,13 @@ results = agent.optimize(max_iterations=10)
 print(f"Best config: {results['best_config']}")
 ```
 
-## With OpenAI (Optional)
+## With Gemini (Optional)
 
 ```python
 import os
-os.environ["OPENAI_API_KEY"] = "your-key"
+os.environ["GEMINI_API_KEY"] = "your-key"
 
-agent = VectorDatabaseAgent()  # Will use LLM for parameter generation
+agent = VectorDatabaseAgent()  # Will use LLM (Gemini) for parameter generation
 ```
 
 ## Files

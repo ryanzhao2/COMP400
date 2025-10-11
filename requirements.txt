@@ -2,6 +2,7 @@ faiss-cpu
 numpy
 langgraph
 langchain
-langchain-openai
 langchain-community
+langchain-google-genai
+google-genai
 python-dotenv
