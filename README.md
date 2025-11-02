@@ -41,6 +41,7 @@ agent = VectorDatabaseAgent()  # Will use LLM (Gemini) for parameter generation
 - `vector_db_agent.py` - Main agent implementation
 - `main.py` - Basic FAISS HNSW example
 - `requirements.txt` - Dependencies
+- `plot_experiments.py` - Generate plots from experiments.jsonl
 
 ## HNSW Parameters
 
@@ -49,3 +50,14 @@ agent = VectorDatabaseAgent()  # Will use LLM (Gemini) for parameter generation
 - **ef_search**: Search quality (10-500)
 
 For research in automated hyperparameter optimization and agentic AI systems.
+
+## Plotting Experiments
+
+```bash
+python plot_experiments.py --log experiments.jsonl --out plots
+```
+Generates:
+- `plots/recall_vs_latency.png`
+- `plots/pareto_frontier.png`
+- `plots/efsearch_vs_recall.png`
+- `plots/true_vs_estimated_recall.png` (if true recall logged)

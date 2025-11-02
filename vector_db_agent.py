@@ -6,6 +6,8 @@ A basic template for tuning FAISS HNSW parameters using intelligent agents.
 import os
 import time
 import json
+import uuid
+from datetime import datetime
 from typing import Dict, List, Any, TypedDict, Optional
 from dataclasses import dataclass
 import numpy as np
@@ -79,6 +81,60 @@ class GraphData:
     dimension: int
     global_distance_stats: DistanceStats
     trials: List[TrialRecord]
+
+# -------- Experiment logging (Archivist) --------
+class ArchivistAgent:
+    """Append experiment records to a JSONL file with a run_id."""
+    def __init__(self, log_path: Optional[str], run_id: str):
+        self.log_path = log_path or os.getenv("EXPERIMENT_LOG", "experiments.jsonl")
+        self.run_id = run_id
+
+    def log(self, record: Dict[str, Any]) -> None:
+        try:
+            enriched = {"run_id": self.run_id, **record}
+            with open(self.log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(enriched) + "\n")
+        except Exception as e:
+            print(f"⚠️  Failed to write experiment record: {e}")
+
+# -------- Sub-agents --------
+class ParamProposerAgent:
+    """Delegates to LLM or heuristic to propose parameters."""
+    def __init__(self, parent: "VectorDatabaseAgent"):
+        self.parent = parent
+
+    def propose(self, state: "OptimizationState") -> Dict[str, int]:
+        if self.parent.lc_llm or self.parent.genai_client:
+            return self.parent._generate_llm_parameters(state)
+        return self.parent._generate_fallback_parameters(state)
+
+
+class ExactRecallEvaluatorAgent:
+    """Computes true recall@k using an exact FAISS baseline."""
+    def __init__(self, k: int = 10, num_queries: int = 100):
+        self.k = k
+        self.num_queries = num_queries
+
+    def evaluate(self, dimension: int, dataset_size: int, params: Dict[str, int]) -> float:
+        # Build ANN index
+        ann_index = faiss.IndexHNSWFlat(dimension, params["hnsw_m"])
+        ann_index.hnsw.efConstruction = params["ef_construction"]
+        ann_index.hnsw.efSearch = params["ef_search"]
+        vectors = np.random.random((dataset_size, dimension)).astype(np.float32)
+        ann_index.add(vectors)  # type: ignore
+        queries = np.random.random((self.num_queries, dimension)).astype(np.float32)
+        _, ann_idx = ann_index.search(queries, self.k)  # type: ignore
+
+        # Exact baseline
+        exact_index = faiss.IndexFlatL2(dimension)
+        exact_index.add(vectors)  # type: ignore
+        _, gt_idx = exact_index.search(queries, self.k)  # type: ignore
+
+        # Recall@k
+        matches = 0
+        for i in range(self.num_queries):
+            matches += len(set(ann_idx[i].tolist()) & set(gt_idx[i].tolist()))
+        return matches / (self.num_queries * self.k)
 
 # -------- JSON I/O helpers for GraphData --------
 def graph_data_to_dict(graph: "GraphData") -> Dict[str, Any]:
@@ -182,7 +238,8 @@ class VectorDatabaseAgent:
     def __init__(self, 
                  openai_api_key: Optional[str] = None,
                  constraints: Optional[ParameterConstraints] = None,
-                 thresholds: Optional[PerformanceThresholds] = None):
+                 thresholds: Optional[PerformanceThresholds] = None,
+                 log_path: Optional[str] = None):
         
         # Set up LLMs (prefer LangChain wrapper, fallback to google-genai client)
         self.genai_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
@@ -210,6 +267,10 @@ class VectorDatabaseAgent:
         # Set up constraints and thresholds
         self.constraints = constraints or ParameterConstraints()
         self.thresholds = thresholds or PerformanceThresholds()
+        self.run_id: Optional[str] = None
+        self.archivist: Optional[ArchivistAgent] = ArchivistAgent(log_path or os.getenv("EXPERIMENT_LOG", "experiments.jsonl"), run_id=str(uuid.uuid4()))
+        self.param_proposer = ParamProposerAgent(self)
+        self.exact_recall_agent = ExactRecallEvaluatorAgent(k=10, num_queries=100)
         
         # Build the workflow
         self.workflow = self._build_workflow()
@@ -223,6 +284,7 @@ class VectorDatabaseAgent:
         workflow.add_node("generate_parameters", self._generate_parameters_node)
         workflow.add_node("build_index", self._build_index_node)
         workflow.add_node("evaluate_performance", self._evaluate_performance_node)
+        workflow.add_node("evaluate_exact_recall", self._evaluate_exact_recall_node)
         workflow.add_node("update_best_config", self._update_best_config_node)
         workflow.add_node("decide_next_action", self._decide_next_action_node)
         
@@ -233,7 +295,8 @@ class VectorDatabaseAgent:
         workflow.add_edge("analyze_dataset", "generate_parameters")
         workflow.add_edge("generate_parameters", "build_index")
         workflow.add_edge("build_index", "evaluate_performance")
-        workflow.add_edge("evaluate_performance", "update_best_config")
+        workflow.add_edge("evaluate_performance", "evaluate_exact_recall")
+        workflow.add_edge("evaluate_exact_recall", "update_best_config")
         workflow.add_edge("update_best_config", "decide_next_action")
         
         # Conditional edges
@@ -268,11 +331,7 @@ class VectorDatabaseAgent:
         """Generate HNSW parameters"""
         print("🧠 Generating parameters...")
         
-        # Use LLM if available, otherwise use fallback
-        if self.lc_llm or self.genai_client:
-            state["current_params"] = self._generate_llm_parameters(state)
-        else:
-            state["current_params"] = self._generate_fallback_parameters(state)
+        state["current_params"] = self.param_proposer.propose(state)
         
         print(f"🎯 Generated params: {state['current_params']}")
         return state
@@ -355,6 +414,53 @@ class VectorDatabaseAgent:
         
         return state
     
+    def _evaluate_exact_recall_node(self, state: OptimizationState) -> OptimizationState:
+        """Compute true recall@k using an exact FAISS baseline (IndexFlatL2)."""
+        print("🎯 Computing exact recall@k...")
+        try:
+            params = state["current_params"]
+            dimension = state["dimension"]
+            dataset_size = state["dataset_size"]
+            k = 10
+
+            # Build HNSW index and run ANN search
+            ann_index = faiss.IndexHNSWFlat(dimension, params["hnsw_m"])
+            ann_index.hnsw.efConstruction = params["ef_construction"]
+            ann_index.hnsw.efSearch = params["ef_search"]
+
+            vectors = np.random.random((dataset_size, dimension)).astype(np.float32)
+            ann_index.add(vectors)  # type: ignore
+
+            num_queries = 100
+            queries = np.random.random((num_queries, dimension)).astype(np.float32)
+            ann_dist, ann_idx = ann_index.search(queries, k)  # type: ignore
+
+            # Build exact baseline (L2) and run exact search
+            exact_index = faiss.IndexFlatL2(dimension)
+            exact_index.add(vectors)  # type: ignore
+            gt_dist, gt_idx = exact_index.search(queries, k)  # type: ignore
+
+            # Compute recall@k
+            recalls = []
+            for i in range(num_queries):
+                ann_set = set(ann_idx[i].tolist())
+                gt_set = set(gt_idx[i].tolist())
+                inter = len(ann_set & gt_set)
+                recalls.append(inter / k)
+            true_recall = float(np.mean(recalls))
+
+            # Attach to metrics
+            metrics = state.get("current_metrics", {})
+            metrics["true_recall"] = true_recall
+            metrics["k"] = k
+            state["current_metrics"] = metrics
+
+            print(f"✅ True Recall@{k}: {true_recall:.3f}")
+        except Exception as e:
+            print(f"❌ Error computing exact recall: {e}")
+            # Non-fatal: continue without true_recall
+        return state
+
     def _update_best_config_node(self, state: OptimizationState) -> OptimizationState:
         """Update best configuration"""
         print("🏆 Updating best configuration...")
@@ -376,9 +482,20 @@ class VectorDatabaseAgent:
             "iteration": state["iteration_count"],
             "params": current_params.copy(),
             "metrics": current_metrics.copy(),
-            "timestamp": time.time()
+            "timestamp": time.time(),
+            "datetime": datetime.utcnow().isoformat() + "Z"
         }
         state["experiment_history"].append(experiment)
+        # Persist to JSONL via Archivist
+        if self.archivist is not None:
+            try:
+                ds = {
+                    "dataset_size": state.get("dataset_size"),
+                    "dimension": state.get("dimension"),
+                }
+                self.archivist.log({"dataset": ds, **experiment})
+            except Exception as e:
+                print(f"⚠️  Logging failed: {e}")
         state["iteration_count"] += 1
         
         return state
