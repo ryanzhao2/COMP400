@@ -42,18 +42,18 @@ from langchain_core.messages import SystemMessage, HumanMessage
 class ParameterConstraints:
     """Constraints for HNSW parameters"""
     hnsw_m_min: int = 4
-    hnsw_m_max: int = 64
+    hnsw_m_max: int = 128
     ef_construction_min: int = 50
-    ef_construction_max: int = 1000
+    ef_construction_max: int = 4000
     ef_search_min: int = 10
-    ef_search_max: int = 500
+    ef_search_max: int = 1000
 
 @dataclass
 class PerformanceThresholds:
     """Performance guardrails"""
-    min_recall: float = 0.8
-    max_latency_ms: float = 100.0
-    max_memory_gb: float = 8.0
+    min_recall: float = 0.9
+    max_latency_ms: float = 10.0
+    max_memory_gb: float = 1.0
     max_experiments: int = 20
 
 @dataclass
@@ -135,6 +135,8 @@ class ExactRecallEvaluatorAgent:
         for i in range(self.num_queries):
             matches += len(set(ann_idx[i].tolist()) & set(gt_idx[i].tolist()))
         return matches / (self.num_queries * self.k)
+
+
 
 # -------- JSON I/O helpers for GraphData --------
 def graph_data_to_dict(graph: "GraphData") -> Dict[str, Any]:
@@ -231,6 +233,9 @@ class OptimizationState(TypedDict):
     iteration_count: int
     status: str
     error_message: Optional[str]
+    # Internal cached data (not persisted):
+    _vectors: Optional[Any]
+    _queries: Optional[Any]
 
 class VectorDatabaseAgent:
     """Basic agent for vector database optimization"""
@@ -239,7 +244,9 @@ class VectorDatabaseAgent:
                  openai_api_key: Optional[str] = None,
                  constraints: Optional[ParameterConstraints] = None,
                  thresholds: Optional[PerformanceThresholds] = None,
-                 log_path: Optional[str] = None):
+                 log_path: Optional[str] = None,
+                 dataset_vectors_path: Optional[str] = None,
+                 dataset_queries_path: Optional[str] = None):
         
         # Set up LLMs (prefer LangChain wrapper, fallback to google-genai client)
         self.genai_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
@@ -271,6 +278,9 @@ class VectorDatabaseAgent:
         self.archivist: Optional[ArchivistAgent] = ArchivistAgent(log_path or os.getenv("EXPERIMENT_LOG", "experiments.jsonl"), run_id=str(uuid.uuid4()))
         self.param_proposer = ParamProposerAgent(self)
         self.exact_recall_agent = ExactRecallEvaluatorAgent(k=10, num_queries=100)
+        # Optional dataset paths
+        self.dataset_vectors_path = dataset_vectors_path
+        self.dataset_queries_path = dataset_queries_path
         
         # Build the workflow
         self.workflow = self._build_workflow()
@@ -316,12 +326,37 @@ class VectorDatabaseAgent:
         """Analyze the dataset characteristics"""
         print("🔍 Analyzing dataset...")
         
-        # Generate sample dataset
-        dataset_size = 10000
-        dimension = 128
+        # Load provided dataset if available; otherwise generate once and reuse
+        vectors = None
+        queries = None
+        try:
+            if self.dataset_vectors_path and os.path.isfile(self.dataset_vectors_path):
+                vectors = np.load(self.dataset_vectors_path).astype(np.float32)
+                if self.dataset_queries_path and os.path.isfile(self.dataset_queries_path):
+                    queries = np.load(self.dataset_queries_path).astype(np.float32)
+        except Exception as e:
+            print(f"⚠️  Failed to load dataset from disk: {e}. Falling back to synthetic.")
+        
+        if vectors is None:
+            # Generate synthetic dataset once and store in state for reuse
+            dataset_size = 20000
+            dimension = 128
+            vectors = np.random.random((dataset_size, dimension)).astype(np.float32)
+            queries = np.random.random((min(100, dataset_size), dimension)).astype(np.float32)
+        else:
+            dataset_size, dimension = int(vectors.shape[0]), int(vectors.shape[1])
+            if queries is None:
+                # Create queries near the data manifold
+                num_q = min(200, dataset_size)
+                idx = np.random.choice(dataset_size, size=num_q, replace=False)
+                q = vectors[idx].copy()
+                q += np.random.normal(0.0, 0.01, size=q.shape).astype(np.float32)
+                queries = q.astype(np.float32)
         
         state["dataset_size"] = dataset_size
         state["dimension"] = dimension
+        state["_vectors"] = vectors
+        state["_queries"] = queries
         state["status"] = "experimenting"
         
         print(f"📊 Dataset: {dataset_size} vectors, {dimension}D")
@@ -350,8 +385,11 @@ class VectorDatabaseAgent:
             index.hnsw.efConstruction = params["ef_construction"]
             index.hnsw.efSearch = params["ef_search"]
             
-            # Generate sample data
-            vectors = np.random.random((dataset_size, dimension)).astype(np.float32)
+            # Use provided/generated dataset (reused across nodes)
+            vectors = state.get("_vectors")
+            if vectors is None or int(vectors.shape[0]) != dataset_size:
+                vectors = np.random.random((dataset_size, dimension)).astype(np.float32)
+                state["_vectors"] = vectors
             index.add(vectors)  # type: ignore
             
             print(f"✅ Index built with {dataset_size} vectors")
@@ -377,12 +415,19 @@ class VectorDatabaseAgent:
             index.hnsw.efConstruction = params["ef_construction"]
             index.hnsw.efSearch = params["ef_search"]
             
-            vectors = np.random.random((dataset_size, dimension)).astype(np.float32)
+            vectors = state.get("_vectors")
+            if vectors is None or int(vectors.shape[0]) != dataset_size:
+                vectors = np.random.random((dataset_size, dimension)).astype(np.float32)
+                state["_vectors"] = vectors
             index.add(vectors)  # type: ignore
             
             # Generate test queries
-            num_queries = 100
-            queries = np.random.random((num_queries, dimension)).astype(np.float32)
+            queries = state.get("_queries")
+            if queries is None or int(queries.shape[1]) != dimension:
+                num_queries = min(200, dataset_size)
+                queries = np.random.random((num_queries, dimension)).astype(np.float32)
+                state["_queries"] = queries
+            num_queries = int(queries.shape[0])
             
             # Measure performance
             start_time = time.time()
@@ -391,7 +436,13 @@ class VectorDatabaseAgent:
             
             # Calculate metrics
             avg_latency = search_time / num_queries
-            estimated_recall = min(0.95, 0.7 + (params["ef_search"] / 1000) * 0.25)
+            # Sigmoid growth model for estimated recall (proxy): saturates between r_min and r_max
+            ef_max = max(1, int(self.constraints.ef_search_max))
+            x = max(0.0, min(1.0, params["ef_search"] / ef_max))
+            slope = 10.0  # larger -> sharper transition around mid-range
+            sig = 1.0 / (1.0 + np.exp(-slope * (x - 0.5)))
+            r_min, r_max = 0.6, 0.98
+            estimated_recall = float(r_min + (r_max - r_min) * sig)
             memory_usage_gb = (index.ntotal * dimension * 4) / (1024**3)
             
             metrics = {
@@ -428,11 +479,18 @@ class VectorDatabaseAgent:
             ann_index.hnsw.efConstruction = params["ef_construction"]
             ann_index.hnsw.efSearch = params["ef_search"]
 
-            vectors = np.random.random((dataset_size, dimension)).astype(np.float32)
+            vectors = state.get("_vectors")
+            if vectors is None or int(vectors.shape[0]) != dataset_size:
+                vectors = np.random.random((dataset_size, dimension)).astype(np.float32)
+                state["_vectors"] = vectors
             ann_index.add(vectors)  # type: ignore
-
-            num_queries = 100
-            queries = np.random.random((num_queries, dimension)).astype(np.float32)
+            
+            queries = state.get("_queries")
+            if queries is None or int(queries.shape[1]) != dimension:
+                num_queries = min(200, dataset_size)
+                queries = np.random.random((num_queries, dimension)).astype(np.float32)
+                state["_queries"] = queries
+            num_queries = int(queries.shape[0])
             ann_dist, ann_idx = ann_index.search(queries, k)  # type: ignore
 
             # Build exact baseline (L2) and run exact search
@@ -746,9 +804,13 @@ class VectorDatabaseAgent:
             best_config={},
             iteration_count=0,
             status="analyzing",
-            error_message=None
+            error_message=None,
+            _vectors=None,
+            _queries=None
         )
-        final_state = self.workflow.invoke(initial_state)
+        # Increase recursion limit to accommodate multi-iteration loops (each iteration traverses multiple nodes)
+        recursion_limit = max(100, int(self.thresholds.max_experiments) * 10)
+        final_state = self.workflow.invoke(initial_state, config={"recursion_limit": recursion_limit})
         print(f"🏁 Optimization completed")
         print(f"📊 Total experiments: {final_state['iteration_count']}")
         if final_state["best_config"]:
@@ -817,31 +879,4 @@ def generate_dummy_graph_data(dataset_size: int = 5000, dimension: int = 128, nu
         trials=trials,
     )
 
-# Example usage
-def main():
-    """Example usage of the VectorDatabaseAgent"""
-    
-    # Create agent
-    agent = VectorDatabaseAgent()
-    
-    # Run optimization
-    results = agent.optimize(max_iterations=5)
-    
-    # Print results
-    print("\n" + "="*50)
-    print("OPTIMIZATION RESULTS")
-    print("="*50)
-    print(f"Experiments run: {results['iteration_count']}")
-    
-    if results["best_config"]:
-        print(f"\nBest configuration:")
-        print(f"  HNSW M: {results['best_config']['params']['hnsw_m']}")
-        print(f"  EF Construction: {results['best_config']['params']['ef_construction']}")
-        print(f"  EF Search: {results['best_config']['params']['ef_search']}")
-        print(f"\nPerformance:")
-        print(f"  Recall: {results['best_config']['metrics']['recall']:.3f}")
-        print(f"  Latency: {results['best_config']['metrics']['latency_ms']:.1f} ms")
-        print(f"  Memory: {results['best_config']['metrics']['memory_gb']:.2f} GB")
-
-if __name__ == "__main__":
-    main()
+ 

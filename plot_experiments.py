@@ -12,7 +12,7 @@ Usage:
 import os
 import json
 import argparse
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -60,39 +60,48 @@ def ensure_out_dir(out_dir: str) -> None:
         os.makedirs(out_dir, exist_ok=True)
 
 
+def _pick_recall_col(df: pd.DataFrame) -> Tuple[str, str]:
+    has_true = "true_recall" in df.columns and df["true_recall"].notna().any()
+    if has_true:
+        return "true_recall", "True recall"
+    return "recall", "Recall (estimated)"
+
+
 def plot_recall_latency(df: pd.DataFrame, out_dir: str) -> None:
+    y_col, y_label = _pick_recall_col(df)
     plt.figure(figsize=(7, 5))
-    sns.scatterplot(data=df, x="latency_ms", y="recall", hue="ef_search", palette="viridis", s=60)
-    plt.title("Recall vs Latency (colored by ef_search)")
+    sns.scatterplot(data=df, x="latency_ms", y=y_col, hue="ef_search", palette="viridis", s=60)
+    plt.title(f"{y_label} vs Latency (colored by ef_search)")
     plt.xlabel("Latency (ms)")
-    plt.ylabel("Recall (estimated)")
+    plt.ylabel(y_label)
     plt.legend(title="ef_search", bbox_to_anchor=(1.05, 1), loc="upper left")
     plt.tight_layout()
     plt.savefig(os.path.join(out_dir, "recall_vs_latency.png"), dpi=150)
     plt.close()
 
 
-def pareto_frontier(df: pd.DataFrame) -> pd.DataFrame:
+def pareto_frontier(df: pd.DataFrame, y_col: str) -> pd.DataFrame:
     # Higher recall is better; lower latency is better.
-    pts = df.dropna(subset=["recall", "latency_ms"]).copy()
-    pts = pts.sort_values(["latency_ms", "recall"], ascending=[True, False])
+    pts = df.dropna(subset=[y_col, "latency_ms"]).copy()
+    pts = pts.sort_values(["latency_ms", y_col], ascending=[True, False])
     pareto: List[int] = []
     best_recall = -1.0
     for idx, row in pts.iterrows():
-        if row["recall"] > best_recall:
+        if row[y_col] > best_recall:
             pareto.append(idx)
-            best_recall = row["recall"]
+            best_recall = row[y_col]
     return pts.loc[pareto]
 
 
 def plot_pareto(df: pd.DataFrame, out_dir: str) -> None:
-    front = pareto_frontier(df)
+    y_col, y_label = _pick_recall_col(df)
+    front = pareto_frontier(df, y_col)
     plt.figure(figsize=(7, 5))
-    sns.scatterplot(data=df, x="latency_ms", y="recall", hue="memory_gb", palette="coolwarm", s=50, alpha=0.6)
-    sns.lineplot(data=front.sort_values("latency_ms"), x="latency_ms", y="recall", color="black", marker="o", label="Pareto")
-    plt.title("Pareto Frontier: Recall vs Latency")
+    sns.scatterplot(data=df, x="latency_ms", y=y_col, hue="memory_gb", palette="coolwarm", s=50, alpha=0.6)
+    sns.lineplot(data=front.sort_values("latency_ms"), x="latency_ms", y=y_col, color="black", marker="o", label="Pareto")
+    plt.title(f"Pareto Frontier: {y_label} vs Latency")
     plt.xlabel("Latency (ms)")
-    plt.ylabel("Recall (estimated)")
+    plt.ylabel(y_label)
     plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
     plt.tight_layout()
     plt.savefig(os.path.join(out_dir, "pareto_frontier.png"), dpi=150)
@@ -100,11 +109,12 @@ def plot_pareto(df: pd.DataFrame, out_dir: str) -> None:
 
 
 def plot_efsearch_recall(df: pd.DataFrame, out_dir: str) -> None:
+    y_col, y_label = _pick_recall_col(df)
     plt.figure(figsize=(7, 5))
-    sns.lineplot(data=df.sort_values("ef_search"), x="ef_search", y="recall", marker="o")
-    plt.title("ef_search vs Recall (estimated)")
+    sns.lineplot(data=df.sort_values("ef_search"), x="ef_search", y=y_col, marker="o")
+    plt.title(f"ef_search vs {y_label}")
     plt.xlabel("ef_search")
-    plt.ylabel("Recall (estimated)")
+    plt.ylabel(y_label)
     plt.tight_layout()
     plt.savefig(os.path.join(out_dir, "efsearch_vs_recall.png"), dpi=150)
     plt.close()
@@ -125,6 +135,53 @@ def plot_true_vs_estimated(df: pd.DataFrame, out_dir: str) -> None:
     plt.ylabel("True recall")
     plt.tight_layout()
     plt.savefig(os.path.join(out_dir, "true_vs_estimated_recall.png"), dpi=150)
+    plt.close()
+
+
+def plot_estimated_variants(df: pd.DataFrame, out_dir: str) -> None:
+    # Only if estimated recall exists
+    if "recall" not in df.columns or not df["recall"].notna().any():
+        return
+    # Recall vs latency (estimated only)
+    plt.figure(figsize=(7, 5))
+    sns.scatterplot(data=df, x="latency_ms", y="recall", hue="ef_search", palette="viridis", s=60)
+    plt.title("Recall (estimated) vs Latency (colored by ef_search)")
+    plt.xlabel("Latency (ms)")
+    plt.ylabel("Recall (estimated)")
+    plt.legend(title="ef_search", bbox_to_anchor=(1.05, 1), loc="upper left")
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, "recall_vs_latency_estimated.png"), dpi=150)
+    plt.close()
+
+    # Pareto (estimated)
+    pts = df.dropna(subset=["recall", "latency_ms"]).copy()
+    pts = pts.sort_values(["latency_ms", "recall"], ascending=[True, False])
+    pareto_idx: List[int] = []
+    best = -1.0
+    for idx, row in pts.iterrows():
+        if row["recall"] > best:
+            pareto_idx.append(idx)
+            best = row["recall"]
+    front = pts.loc[pareto_idx]
+    plt.figure(figsize=(7, 5))
+    sns.scatterplot(data=df, x="latency_ms", y="recall", hue="memory_gb", palette="coolwarm", s=50, alpha=0.6)
+    sns.lineplot(data=front.sort_values("latency_ms"), x="latency_ms", y="recall", color="black", marker="o", label="Pareto")
+    plt.title("Pareto Frontier: Recall (estimated) vs Latency")
+    plt.xlabel("Latency (ms)")
+    plt.ylabel("Recall (estimated)")
+    plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, "pareto_frontier_estimated.png"), dpi=150)
+    plt.close()
+
+    # ef_search vs estimated recall
+    plt.figure(figsize=(7, 5))
+    sns.lineplot(data=df.sort_values("ef_search"), x="ef_search", y="recall", marker="o")
+    plt.title("ef_search vs Recall (estimated)")
+    plt.xlabel("ef_search")
+    plt.ylabel("Recall (estimated)")
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, "efsearch_vs_recall_estimated.png"), dpi=150)
     plt.close()
 
 
@@ -150,6 +207,8 @@ def main() -> None:
     if "ef_search" in df.columns and df["ef_search"].notna().any():
         plot_efsearch_recall(df, args.out)
     plot_true_vs_estimated(df, args.out)
+    # Also emit estimated-only variants for comparison
+    plot_estimated_variants(df, args.out)
 
     print(f"Saved plots to: {os.path.abspath(args.out)}")
 
