@@ -42,11 +42,11 @@ from langchain_core.messages import SystemMessage, HumanMessage
 class ParameterConstraints:
     """Constraints for HNSW parameters"""
     hnsw_m_min: int = 4
-    hnsw_m_max: int = 128
+    hnsw_m_max: int = 16
     ef_construction_min: int = 50
-    ef_construction_max: int = 4000
+    ef_construction_max: int = 150
     ef_search_min: int = 10
-    ef_search_max: int = 1000
+    ef_search_max: int = 100
 
 @dataclass
 class PerformanceThresholds:
@@ -109,32 +109,8 @@ class ParamProposerAgent:
         return self.parent._generate_fallback_parameters(state)
 
 
-class ExactRecallEvaluatorAgent:
-    """Computes true recall@k using an exact FAISS baseline."""
-    def __init__(self, k: int = 10, num_queries: int = 100):
-        self.k = k
-        self.num_queries = num_queries
-
-    def evaluate(self, dimension: int, dataset_size: int, params: Dict[str, int]) -> float:
-        # Build ANN index
-        ann_index = faiss.IndexHNSWFlat(dimension, params["hnsw_m"])
-        ann_index.hnsw.efConstruction = params["ef_construction"]
-        ann_index.hnsw.efSearch = params["ef_search"]
-        vectors = np.random.random((dataset_size, dimension)).astype(np.float32)
-        ann_index.add(vectors)  # type: ignore
-        queries = np.random.random((self.num_queries, dimension)).astype(np.float32)
-        _, ann_idx = ann_index.search(queries, self.k)  # type: ignore
-
-        # Exact baseline
-        exact_index = faiss.IndexFlatL2(dimension)
-        exact_index.add(vectors)  # type: ignore
-        _, gt_idx = exact_index.search(queries, self.k)  # type: ignore
-
-        # Recall@k
-        matches = 0
-        for i in range(self.num_queries):
-            matches += len(set(ann_idx[i].tolist()) & set(gt_idx[i].tolist()))
-        return matches / (self.num_queries * self.k)
+# (Note) We compute exact recall inline in the evaluation node below.
+# A prior helper class for exact recall was removed to reduce duplication.
 
 
 
@@ -236,6 +212,10 @@ class OptimizationState(TypedDict):
     # Internal cached data (not persisted):
     _vectors: Optional[Any]
     _queries: Optional[Any]
+    _last_build_ms: Optional[float]
+    phase: str  # "recall" or "latency"
+    tried_params: List[Dict[str, int]]
+    exploration_count: int
 
 class VectorDatabaseAgent:
     """Basic agent for vector database optimization"""
@@ -246,7 +226,10 @@ class VectorDatabaseAgent:
                  thresholds: Optional[PerformanceThresholds] = None,
                  log_path: Optional[str] = None,
                  dataset_vectors_path: Optional[str] = None,
-                 dataset_queries_path: Optional[str] = None):
+                 dataset_queries_path: Optional[str] = None,
+                 num_threads: Optional[int] = None,
+                 use_gpu_exact: Optional[bool] = None,
+                 initial_exploration_trials: int = 10):
         
         # Set up LLMs (prefer LangChain wrapper, fallback to google-genai client)
         self.genai_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
@@ -277,10 +260,27 @@ class VectorDatabaseAgent:
         self.run_id: Optional[str] = None
         self.archivist: Optional[ArchivistAgent] = ArchivistAgent(log_path or os.getenv("EXPERIMENT_LOG", "experiments.jsonl"), run_id=str(uuid.uuid4()))
         self.param_proposer = ParamProposerAgent(self)
-        self.exact_recall_agent = ExactRecallEvaluatorAgent(k=10, num_queries=100)
         # Optional dataset paths
         self.dataset_vectors_path = dataset_vectors_path
         self.dataset_queries_path = dataset_queries_path
+        # GPU for exact baseline (optional)
+        env_use_gpu = os.getenv("FAISS_USE_GPU_EXACT")
+        self.use_gpu_exact = (use_gpu_exact if use_gpu_exact is not None else (env_use_gpu == "1" or env_use_gpu == "true"))
+        # Initial exploration trials before convergence
+        self.initial_exploration_trials = max(0, int(os.getenv("INITIAL_EXPLORATION_TRIALS", initial_exploration_trials)))
+        # Threads (FAISS OpenMP)
+        try:
+            env_threads = os.getenv("FAISS_NUM_THREADS")
+            threads = num_threads or (int(env_threads) if env_threads else None) or (os.cpu_count() or 1)
+            faiss.omp_set_num_threads(int(threads))  # type: ignore
+        except Exception:
+            pass
+        # LLM history configuration
+        try:
+            self.llm_history_trials = int(os.getenv("LLM_HISTORY_TRIALS", "5"))
+        except Exception:
+            self.llm_history_trials = 5
+        self.include_past_log_history = os.getenv("INCLUDE_PAST_LOG_HISTORY", "0").lower() in ("1", "true", "yes")
         
         # Build the workflow
         self.workflow = self._build_workflow()
@@ -323,7 +323,12 @@ class VectorDatabaseAgent:
     
     # Node implementations
     def _analyze_dataset_node(self, state: OptimizationState) -> OptimizationState:
-        """Analyze the dataset characteristics"""
+        """Analyze or prepare dataset and queries used across nodes in this run.
+
+        - Tries to load vectors/queries from disk if paths were provided.
+        - Otherwise generates a one-off synthetic dataset and query set.
+        - Stores both in state so all subsequent nodes reuse the same data.
+        """
         print("🔍 Analyzing dataset...")
         
         # Load provided dataset if available; otherwise generate once and reuse
@@ -339,7 +344,7 @@ class VectorDatabaseAgent:
         
         if vectors is None:
             # Generate synthetic dataset once and store in state for reuse
-            dataset_size = 20000
+            dataset_size = 10000
             dimension = 128
             vectors = np.random.random((dataset_size, dimension)).astype(np.float32)
             queries = np.random.random((min(100, dataset_size), dimension)).astype(np.float32)
@@ -358,21 +363,117 @@ class VectorDatabaseAgent:
         state["_vectors"] = vectors
         state["_queries"] = queries
         state["status"] = "experimenting"
+        state["phase"] = state.get("phase") or "recall"
+        state["tried_params"] = state.get("tried_params", [])
+        state["exploration_count"] = int(state.get("exploration_count", 0))
         
         print(f"📊 Dataset: {dataset_size} vectors, {dimension}D")
         return state
     
     def _generate_parameters_node(self, state: OptimizationState) -> OptimizationState:
-        """Generate HNSW parameters"""
+        """Generate HNSW parameters for the next trial.
+
+        Behavior:
+        - First N trials (exploration): sample diverse params across ranges.
+        - Afterwards: phase-aware proposals; reduce ef_search in 'latency' phase.
+        - Avoids duplicate parameter sets tried earlier in this run.
+        """
         print("🧠 Generating parameters...")
         
-        state["current_params"] = self.param_proposer.propose(state)
+        # Exploration first: diversify parameters for the first N trials
+        exploring = state.get("exploration_count", 0) < getattr(self, "initial_exploration_trials", 10)
+        proposed = self.param_proposer.propose(state) if not exploring else {}
+        # Phase-aware adjustment and diversification
+        phase = state.get("phase", "recall")
+        constraints = self.constraints
+        tried = state.get("tried_params", [])
+        tried_set = { (p.get("hnsw_m"), p.get("ef_construction"), p.get("ef_search")) for p in tried }
+        if exploring:
+            # Deterministic coverage over a small grid to ensure diversity
+            grid = self._get_exploration_grid()
+            idx = min(len(tried), len(grid) - 1)
+            hnsw_m = grid[idx]["hnsw_m"]
+            ef_c = grid[idx]["ef_construction"]
+            ef_s = grid[idx]["ef_search"]
+        else:
+            hnsw_m = int(proposed.get("hnsw_m", 16))
+            ef_c = int(proposed.get("ef_construction", 200))
+            ef_s = int(proposed.get("ef_search", 50))
+        # In latency phase, bias toward reducing ef_search to lower latency while maintaining recall
+        if phase == "latency":
+            ef_s = max(constraints.ef_search_min, int(max(ef_s * 0.8, ef_s - 50)))
+        # Clamp within constraints
+        hnsw_m = max(constraints.hnsw_m_min, min(constraints.hnsw_m_max, hnsw_m))
+        ef_c = max(constraints.ef_construction_min, min(constraints.ef_construction_max, ef_c))
+        ef_s = max(constraints.ef_search_min, min(constraints.ef_search_max, ef_s))
+        candidate = {"hnsw_m": hnsw_m, "ef_construction": ef_c, "ef_search": ef_s}
+        # Avoid duplicates by random perturbation if already tried
+        if (hnsw_m, ef_c, ef_s) in tried_set:
+            import random
+            for _ in range(5):
+                jitter_m = hnsw_m + random.choice([-8, -4, 0, 4, 8])
+                jitter_c = ef_c + random.choice([-200, -100, 0, 100, 200])
+                jitter_s = ef_s + random.choice([-100, -50, 0, 50, 100])
+                jitter_m = max(constraints.hnsw_m_min, min(constraints.hnsw_m_max, jitter_m))
+                jitter_c = max(constraints.ef_construction_min, min(constraints.ef_construction_max, jitter_c))
+                jitter_s = max(constraints.ef_search_min, min(constraints.ef_search_max, jitter_s))
+                if (jitter_m, jitter_c, jitter_s) not in tried_set:
+                    candidate = {"hnsw_m": jitter_m, "ef_construction": jitter_c, "ef_search": jitter_s}
+                    break
+        state["current_params"] = candidate
+        # Track tried params
+        tried.append(candidate.copy())
+        state["tried_params"] = tried
         
-        print(f"🎯 Generated params: {state['current_params']}")
+        print(f"🎯 Generated params ({'explore' if exploring else phase} phase): {state['current_params']}")
         return state
+
+    def _get_exploration_grid(self) -> List[Dict[str, int]]:
+        """Return a small, diverse grid of parameter combinations for exploration."""
+        c = self.constraints
+        # Candidates across range; dedup by set conversion later
+        m_candidates = [c.hnsw_m_min, 16, 32, 48, 64, c.hnsw_m_max]
+        m_candidates = sorted({max(c.hnsw_m_min, min(c.hnsw_m_max, v)) for v in m_candidates})
+        c_candidates = [c.ef_construction_min, 200, 400, 800, 1200, c.ef_construction_max]
+        c_candidates = sorted({max(c.ef_construction_min, min(c.ef_construction_max, v)) for v in c_candidates})
+        s_candidates = [c.ef_search_min, 20, 30, 40, 50, 75, 100, 200, 400, 600, 800, c.ef_search_max]
+        s_candidates = sorted({max(c.ef_search_min, min(c.ef_search_max, v)) for v in s_candidates})
+        # Build a curated set: combine positions across the lists to avoid full Cartesian blow-up
+        combos: List[Dict[str, int]] = []
+        for i, s in enumerate(s_candidates):
+            m = m_candidates[min(i % len(m_candidates), len(m_candidates)-1)]
+            ec = c_candidates[min((i // 2) % len(c_candidates), len(c_candidates)-1)]
+            combos.append({"hnsw_m": m, "ef_construction": ec, "ef_search": s})
+        # Ensure we have at least initial_exploration_trials combos
+        if len(combos) < self.initial_exploration_trials:
+            # Add more by rotating pairs
+            for m in m_candidates:
+                for ec in c_candidates:
+                    for s in s_candidates:
+                        combos.append({"hnsw_m": m, "ef_construction": ec, "ef_search": s})
+                        if len(combos) >= self.initial_exploration_trials * 2:
+                            break
+                    if len(combos) >= self.initial_exploration_trials * 2:
+                        break
+                if len(combos) >= self.initial_exploration_trials * 2:
+                    break
+        # Deduplicate preserving order
+        seen = set()
+        unique: List[Dict[str, int]] = []
+        for d in combos:
+            key = (d["hnsw_m"], d["ef_construction"], d["ef_search"])
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(d)
+        return unique
     
     def _build_index_node(self, state: OptimizationState) -> OptimizationState:
-        """Build FAISS HNSW index"""
+        """Build a fresh FAISS HNSW index and add all vectors.
+
+        Note: For clarity we build per node; caching the index can reduce latency,
+        but is omitted here to keep node boundaries explicit and state minimal.
+        """
         print("🔨 Building index...")
         
         try:
@@ -381,6 +482,7 @@ class VectorDatabaseAgent:
             dataset_size = state["dataset_size"]
             
             # Create HNSW index
+            build_start = time.time()
             index = faiss.IndexHNSWFlat(dimension, params["hnsw_m"])
             index.hnsw.efConstruction = params["ef_construction"]
             index.hnsw.efSearch = params["ef_search"]
@@ -391,6 +493,9 @@ class VectorDatabaseAgent:
                 vectors = np.random.random((dataset_size, dimension)).astype(np.float32)
                 state["_vectors"] = vectors
             index.add(vectors)  # type: ignore
+            build_ms = (time.time() - build_start) * 1000.0
+            state["_last_build_ms"] = float(build_ms)
+            print(f"🕒 Index build time: {build_ms:.1f} ms")
             
             print(f"✅ Index built with {dataset_size} vectors")
             
@@ -402,7 +507,16 @@ class VectorDatabaseAgent:
         return state
     
     def _evaluate_performance_node(self, state: OptimizationState) -> OptimizationState:
-        """Evaluate index performance"""
+        """Evaluate index performance (ANN search).
+
+        Measures:
+        - Average query latency (ms/query) over a batch of queries.
+        - Estimated recall via a bounded sigmoid growth model of ef_search.
+        - Rough memory footprint based on vector storage (does not include graph overhead).
+
+        Note: This node rebuilds the index for isolation. It could reuse the index
+        built earlier in the iteration to save time; we leave it explicit for readability.
+        """
         print("📊 Evaluating performance...")
         
         try:
@@ -411,6 +525,7 @@ class VectorDatabaseAgent:
             dataset_size = state["dataset_size"]
             
             # Rebuild index for evaluation
+            build_start = time.time()
             index = faiss.IndexHNSWFlat(dimension, params["hnsw_m"])
             index.hnsw.efConstruction = params["ef_construction"]
             index.hnsw.efSearch = params["ef_search"]
@@ -420,6 +535,7 @@ class VectorDatabaseAgent:
                 vectors = np.random.random((dataset_size, dimension)).astype(np.float32)
                 state["_vectors"] = vectors
             index.add(vectors)  # type: ignore
+            build_ms = (time.time() - build_start) * 1000.0
             
             # Generate test queries
             queries = state.get("_queries")
@@ -449,7 +565,8 @@ class VectorDatabaseAgent:
                 "recall": estimated_recall,
                 "latency_ms": avg_latency,
                 "memory_gb": memory_usage_gb,
-                "index_size": index.ntotal
+                "index_size": index.ntotal,
+                "build_ms": float(build_ms)
             }
             
             state["current_metrics"] = metrics
@@ -466,7 +583,12 @@ class VectorDatabaseAgent:
         return state
     
     def _evaluate_exact_recall_node(self, state: OptimizationState) -> OptimizationState:
-        """Compute true recall@k using an exact FAISS baseline (IndexFlatL2)."""
+        """Compute true recall@k using an exact FAISS baseline (IndexFlatL2).
+
+        - Runs ANN (HNSW) search and exact (FlatL2) search on the same queries.
+        - Computes average overlap fraction over queries.
+        - If FAISS GPU is available and enabled, the FlatL2 baseline runs on GPU.
+        """
         print("🎯 Computing exact recall@k...")
         try:
             params = state["current_params"]
@@ -493,10 +615,31 @@ class VectorDatabaseAgent:
             num_queries = int(queries.shape[0])
             ann_dist, ann_idx = ann_index.search(queries, k)  # type: ignore
 
-            # Build exact baseline (L2) and run exact search
-            exact_index = faiss.IndexFlatL2(dimension)
-            exact_index.add(vectors)  # type: ignore
-            gt_dist, gt_idx = exact_index.search(queries, k)  # type: ignore
+            # Build exact baseline (L2) and run exact search (GPU if available/enabled)
+            gt_dist = None
+            gt_idx = None
+            use_gpu = False
+            try:
+                use_gpu = bool(self.use_gpu_exact) and hasattr(faiss, "get_num_gpus") and faiss.get_num_gpus() > 0  # type: ignore
+            except Exception:
+                use_gpu = False
+
+            if use_gpu:
+                try:
+                    res = faiss.StandardGpuResources()  # type: ignore
+                    flat_cpu = faiss.IndexFlatL2(dimension)
+                    exact_index = faiss.index_cpu_to_gpu(res, 0, flat_cpu)  # type: ignore
+                    exact_index.add(vectors)  # type: ignore
+                    gt_dist, gt_idx = exact_index.search(queries, k)  # type: ignore
+                except Exception:
+                    # Fallback to CPU exact if GPU path fails
+                    exact_index = faiss.IndexFlatL2(dimension)
+                    exact_index.add(vectors)  # type: ignore
+                    gt_dist, gt_idx = exact_index.search(queries, k)  # type: ignore
+            else:
+                exact_index = faiss.IndexFlatL2(dimension)
+                exact_index.add(vectors)  # type: ignore
+                gt_dist, gt_idx = exact_index.search(queries, k)  # type: ignore
 
             # Compute recall@k
             recalls = []
@@ -544,6 +687,8 @@ class VectorDatabaseAgent:
             "datetime": datetime.utcnow().isoformat() + "Z"
         }
         state["experiment_history"].append(experiment)
+        # Count exploration trials
+        state["exploration_count"] = int(state.get("exploration_count", 0)) + 1
         # Persist to JSONL via Archivist
         if self.archivist is not None:
             try:
@@ -568,13 +713,26 @@ class VectorDatabaseAgent:
             state["status"] = "done"
             return state
         
-        # Check if we've found a good enough solution
+        # Force initial exploration for N trials regardless of thresholds
+        exploration_count = int(state.get("exploration_count", 0))
+        if exploration_count < getattr(self, "initial_exploration_trials", 5):
+            state["status"] = "experimenting"
+            return state
+        
+        # Phase-based progression
         current_metrics = state["current_metrics"]
-        if (current_metrics["recall"] >= self.thresholds.min_recall and
-            current_metrics["latency_ms"] <= self.thresholds.max_latency_ms and
-            current_metrics["memory_gb"] <= self.thresholds.max_memory_gb):
-            print("✅ Performance targets met!")
-            state["status"] = "done"
+        phase = state.get("phase", "recall")
+        if phase == "recall" and current_metrics.get("recall", 0.0) >= self.thresholds.min_recall:
+            # Switch to latency optimization while maintaining recall target
+            print("✅ Recall target met. Switching to latency optimization phase.")
+            state["phase"] = "latency"
+            state["status"] = "experimenting"
+            return state
+        if phase == "latency" and current_metrics.get("recall", 0.0) < self.thresholds.min_recall:
+            # If we dipped below recall, go back to recall phase
+            print("⚠️  Recall dropped below target. Returning to recall phase.")
+            state["phase"] = "recall"
+            state["status"] = "experimenting"
             return state
         
         # Continue optimization
@@ -587,6 +745,14 @@ class VectorDatabaseAgent:
         # If no LLM available, fallback
         if not (self.lc_llm or self.genai_client):
             return self._generate_fallback_parameters(state)
+        # Build recent history/past log payloads
+        recent_trials = self._get_recent_trials(state, max(0, int(getattr(self, "llm_history_trials", 5))))
+        past_log_trials: List[Dict[str, Any]] = []
+        if self.include_past_log_history:
+            try:
+                past_log_trials = self._load_past_log_trials(state, limit=5)
+            except Exception:
+                past_log_trials = []
         # Build a single plain-text prompt
         prompt_text = (
             "You are an expert on FAISS HNSW parameter tuning. Propose parameters to maximize recall while respecting latency and memory targets.\n\n"
@@ -602,8 +768,11 @@ class VectorDatabaseAgent:
             f"- dataset_size: {state.get('dataset_size')}\n"
             f"- dimension: {state.get('dimension')}\n"
             f"- last_params: {json.dumps(state.get('current_params', {}))}\n"
-            f"- last_metrics: {json.dumps(state.get('current_metrics', {}))}\n\n"
-            "Return ONLY compact JSON with keys hnsw_m, ef_construction, ef_search, rationale."
+            f"- last_metrics: {json.dumps(state.get('current_metrics', {}))}\n"
+            f"- best_config: {json.dumps(state.get('best_config', {}))}\n"
+            f"- recent_trials (most recent first): {json.dumps(recent_trials)}\n"
+            + (f"- past_runs_similar (from log): {json.dumps(past_log_trials)}\n\n" if past_log_trials else "\n")
+            + "Return ONLY compact JSON with keys hnsw_m, ef_construction, ef_search, rationale."
         )
 
         try:
@@ -632,6 +801,71 @@ class VectorDatabaseAgent:
             return self._validate_parameters(params)
         except Exception:
             return self._generate_fallback_parameters(state)
+
+    def _get_recent_trials(self, state: OptimizationState, n: int) -> List[Dict[str, Any]]:
+        """Return last n trials from current run in compact form for LLM context (most recent first)."""
+        trials_src = state.get("experiment_history", [])
+        if not trials_src or n <= 0:
+            return []
+        trials = trials_src[-n:][::-1]
+        compact: List[Dict[str, Any]] = []
+        for t in trials:
+            params = t.get("params", {})
+            metrics = t.get("metrics", {})
+            compact.append({
+                "params": {
+                    "hnsw_m": int(params.get("hnsw_m", 0)),
+                    "ef_construction": int(params.get("ef_construction", 0)),
+                    "ef_search": int(params.get("ef_search", 0)),
+                },
+                "metrics": {
+                    "recall": float(metrics.get("recall", 0.0)),
+                    "true_recall": (float(metrics.get("true_recall")) if metrics.get("true_recall") is not None else None),
+                    "latency_ms": float(metrics.get("latency_ms", 0.0)),
+                    "memory_gb": float(metrics.get("memory_gb", 0.0)),
+                }
+            })
+        return compact
+
+    def _load_past_log_trials(self, state: OptimizationState, limit: int = 5) -> List[Dict[str, Any]]:
+        """Load up to 'limit' recent trials from JSONL log matching current dimension and dataset_size."""
+        log_path = getattr(self.archivist, "log_path", os.getenv("EXPERIMENT_LOG", "experiments.jsonl"))
+        if not log_path or not os.path.isfile(log_path):
+            return []
+        dim = state.get("dimension")
+        size = state.get("dataset_size")
+        rows: List[Dict[str, Any]] = []
+        try:
+            with open(log_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    s = line.strip()
+                    if not s:
+                        continue
+                    try:
+                        obj = json.loads(s)
+                    except Exception:
+                        continue
+                    ds = obj.get("dataset", {})
+                    if (dim and ds.get("dimension") != dim) or (size and ds.get("dataset_size") != size):
+                        continue
+                    params = obj.get("params", {})
+                    metrics = obj.get("metrics", {})
+                    rows.append({
+                        "params": {
+                            "hnsw_m": int(params.get("hnsw_m", 0)),
+                            "ef_construction": int(params.get("ef_construction", 0)),
+                            "ef_search": int(params.get("ef_search", 0)),
+                        },
+                        "metrics": {
+                            "recall": float(metrics.get("recall", 0.0)),
+                            "true_recall": (float(metrics.get("true_recall")) if metrics.get("true_recall") is not None else None),
+                            "latency_ms": float(metrics.get("latency_ms", 0.0)),
+                            "memory_gb": float(metrics.get("memory_gb", 0.0)),
+                        }
+                    })
+        except Exception:
+            return []
+        return rows[-limit:][::-1]
 
     def recommend_parameters_from_graph(self, graph_data: "GraphData") -> Dict[str, Any]:
         """Use LLM (or heuristic) to recommend params from external graph data.
@@ -806,7 +1040,11 @@ class VectorDatabaseAgent:
             status="analyzing",
             error_message=None,
             _vectors=None,
-            _queries=None
+            _queries=None,
+            _last_build_ms=None,
+            phase="recall",
+            tried_params=[],
+            exploration_count=0
         )
         # Increase recursion limit to accommodate multi-iteration loops (each iteration traverses multiple nodes)
         recursion_limit = max(100, int(self.thresholds.max_experiments) * 10)

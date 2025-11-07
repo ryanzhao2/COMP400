@@ -15,6 +15,7 @@ from vector_db_agent import VectorDatabaseAgent
 
 
 def main() -> None:
+    """Parse CLI arguments and run the optimization loop."""
     parser = argparse.ArgumentParser(description="Run HNSW optimization experiments and log results.")
     parser.add_argument("--iterations", type=int, default=5, help="Max number of experiments to run")
     parser.add_argument("--log", default=os.getenv("EXPERIMENT_LOG", "experiments.jsonl"), help="Path to experiments JSONL log")

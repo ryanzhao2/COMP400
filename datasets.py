@@ -14,11 +14,13 @@ import numpy as np
 
 
 def set_seed(seed: int) -> None:
+    """Set numpy RNG seed (kept for potential future use)."""
     rng = np.random.default_rng(seed)
     np.random.seed(seed)
 
 
 def generate_gaussian_clusters(num_vectors: int, dimension: int, num_clusters: int = 8, cluster_std: float = 0.1, seed: int = 42) -> np.ndarray:
+    """Generate vectors clustered around random Gaussian centers."""
     rng = np.random.default_rng(seed)
     centers = rng.normal(0.0, 1.0, size=(num_clusters, dimension)).astype(np.float32)
     counts = np.full(num_clusters, num_vectors // num_clusters, dtype=int)
@@ -31,6 +33,7 @@ def generate_gaussian_clusters(num_vectors: int, dimension: int, num_clusters: i
 
 
 def generate_uniform_sphere(num_vectors: int, dimension: int, seed: int = 42) -> np.ndarray:
+    """Generate unit vectors uniformly distributed on the hypersphere."""
     rng = np.random.default_rng(seed)
     x = rng.normal(0.0, 1.0, size=(num_vectors, dimension)).astype(np.float32)
     norms = np.linalg.norm(x, axis=1, keepdims=True) + 1e-12
@@ -38,9 +41,7 @@ def generate_uniform_sphere(num_vectors: int, dimension: int, seed: int = 42) ->
 
 
 def generate_powerlaw(num_vectors: int, dimension: int, alpha: float = 2.0, seed: int = 42) -> np.ndarray:
-    """
-    Sample directions uniformly, radii from a power-law p(r) ~ r^{-alpha} on (0, 1].
-    """
+    """Vectors with uniform directions and power-law radii p(r) ~ r^{-alpha} on (0, 1]."""
     rng = np.random.default_rng(seed)
     # Directions
     dirs = rng.normal(0.0, 1.0, size=(num_vectors, dimension)).astype(np.float32)
@@ -53,6 +54,7 @@ def generate_powerlaw(num_vectors: int, dimension: int, alpha: float = 2.0, seed
 
 
 def generate_queries(vectors: np.ndarray, num_queries: int = 100, seed: int = 123) -> np.ndarray:
+    """Create queries by sampling dataset points and adding small Gaussian noise."""
     rng = np.random.default_rng(seed)
     n, d = vectors.shape
     if n == 0:

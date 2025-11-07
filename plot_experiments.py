@@ -61,6 +61,10 @@ def ensure_out_dir(out_dir: str) -> None:
 
 
 def _pick_recall_col(df: pd.DataFrame) -> Tuple[str, str]:
+    """Return (column, label) choosing true_recall when available, else estimated recall.
+
+    This ensures plots reflect actual accuracy when the exact baseline was computed.
+    """
     has_true = "true_recall" in df.columns and df["true_recall"].notna().any()
     if has_true:
         return "true_recall", "True recall"
@@ -81,7 +85,10 @@ def plot_recall_latency(df: pd.DataFrame, out_dir: str) -> None:
 
 
 def pareto_frontier(df: pd.DataFrame, y_col: str) -> pd.DataFrame:
-    # Higher recall is better; lower latency is better.
+    """Compute Pareto frontier on (latency_ms, y_col).
+
+    A point (latency, recall) is Pareto if no other point has lower latency AND higher recall.
+    """
     pts = df.dropna(subset=[y_col, "latency_ms"]).copy()
     pts = pts.sort_values(["latency_ms", y_col], ascending=[True, False])
     pareto: List[int] = []
@@ -139,6 +146,7 @@ def plot_true_vs_estimated(df: pd.DataFrame, out_dir: str) -> None:
 
 
 def plot_estimated_variants(df: pd.DataFrame, out_dir: str) -> None:
+    """Emit additional plots using estimated recall only, for comparison/debugging."""
     # Only if estimated recall exists
     if "recall" not in df.columns or not df["recall"].notna().any():
         return
@@ -189,6 +197,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--log", default=os.getenv("EXPERIMENT_LOG", "experiments.jsonl"), help="Path to experiments JSONL")
     parser.add_argument("--out", default="plots", help="Output directory for plots")
+    parser.add_argument("--hnsw_m", type=int, default=None, help="Clean filter: fixed hnsw_m")
+    parser.add_argument("--ef_construction", type=int, default=None, help="Clean filter: fixed ef_construction")
+    parser.add_argument("--subset_name", default="fixed_params", help="Subfolder name for filtered (fixed-params) plots")
     args = parser.parse_args()
 
     ensure_out_dir(args.out)
@@ -200,17 +211,61 @@ def main() -> None:
     if df.empty:
         print("No records found in log. Nothing to plot.")
         return
+    # Normalize dtypes to ensure exact-match filtering works
+    for col in ["hnsw_m", "ef_construction", "ef_search", "index_size", "dataset_size", "dimension"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    # Helpful summary
+    try:
+        h_vals = sorted(df["hnsw_m"].dropna().unique().tolist()) if "hnsw_m" in df.columns else []
+        ec_vals = sorted(df["ef_construction"].dropna().unique().tolist()) if "ef_construction" in df.columns else []
+        print(f"Available hnsw_m values: {h_vals}")
+        print(f"Available ef_construction values: {ec_vals}")
+    except Exception:
+        pass
 
-    # Basic plots
-    plot_recall_latency(df, args.out)
-    plot_pareto(df, args.out)
+    # Experimental (all data)
+    exp_dir = os.path.join(args.out, "experimental")
+    ensure_out_dir(exp_dir)
+    plot_recall_latency(df, exp_dir)
+    plot_pareto(df, exp_dir)
     if "ef_search" in df.columns and df["ef_search"].notna().any():
-        plot_efsearch_recall(df, args.out)
-    plot_true_vs_estimated(df, args.out)
-    # Also emit estimated-only variants for comparison
-    plot_estimated_variants(df, args.out)
+        plot_efsearch_recall(df, exp_dir)
+    plot_true_vs_estimated(df, exp_dir)
+    plot_estimated_variants(df, exp_dir)
 
-    print(f"Saved plots to: {os.path.abspath(args.out)}")
+    # Clean (filtered by fixed M and EF construction), if provided
+    if args.hnsw_m is not None and args.ef_construction is not None:
+        clean_df = df[(df["hnsw_m"].astype("Int64") == int(args.hnsw_m)) &
+                      (df["ef_construction"].astype("Int64") == int(args.ef_construction))].copy()
+        if clean_df.empty:
+            print(f"No records match hnsw_m={args.hnsw_m}, ef_construction={args.ef_construction}. Skipping clean plots.")
+            # Print top-10 most common (M, EC) pairs to help the user pick
+            try:
+                freq = (df.groupby(["hnsw_m", "ef_construction"])
+                          .size()
+                          .reset_index(name="count")
+                          .sort_values("count", ascending=False)
+                          .head(10))
+                print("Most common (hnsw_m, ef_construction) pairs:")
+                for _, r in freq.iterrows():
+                    print(f"  M={int(r['hnsw_m'])}, EC={int(r['ef_construction'])}: {int(r['count'])} trials")
+            except Exception:
+                pass
+        else:
+            # Place filtered plots under a named subfolder (default: 'clean')
+            clean_dir = os.path.join(args.out, args.subset_name, f"M{args.hnsw_m}_EC{args.ef_construction}")
+            ensure_out_dir(clean_dir)
+            plot_recall_latency(clean_df, clean_dir)
+            plot_pareto(clean_df, clean_dir)
+            if "ef_search" in clean_df.columns and clean_df["ef_search"].notna().any():
+                plot_efsearch_recall(clean_df, clean_dir)
+            plot_true_vs_estimated(clean_df, clean_dir)
+            plot_estimated_variants(clean_df, clean_dir)
+
+    print(f"Saved experimental plots to: {os.path.abspath(exp_dir)}")
+    if args.hnsw_m is not None and args.ef_construction is not None:
+        print(f"Filtered plots (if any) saved under: {os.path.abspath(os.path.join(args.out, args.subset_name))}")
 
 
 if __name__ == "__main__":
