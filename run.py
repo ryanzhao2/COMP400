@@ -11,7 +11,7 @@ Usage examples:
 import os
 import argparse
 
-from vector_db_agent import VectorDatabaseAgent
+from vdb.agent import VectorDatabaseAgent
 
 
 def main() -> None:
