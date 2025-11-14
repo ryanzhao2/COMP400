@@ -1,3 +1,12 @@
 .venv/
 Ideas.txt
 paper/*
+
+# Generated FAISS index files (too large for Git)
+data/*.index
+data/hnsw.index
+*.index
+
+# Large dataset files (track with Git LFS if needed)
+# Uncomment if you want to track .npy files with LFS:
+# *.npy
