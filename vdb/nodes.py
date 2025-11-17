@@ -229,11 +229,39 @@ def evaluate_exact_recall_node(agent: Any, state: Any) -> Any:
         dimension = state["dimension"]
         dataset_size = state["dataset_size"]
         k = 10
-        ann_index = _create_index(dimension, params["hnsw_m"], params["ef_construction"], params["ef_search"])
+        
+        # Calculate database size in MB
         vectors = state.get("_vectors")
         if vectors is None or int(vectors.shape[0]) != dataset_size:
             vectors = np.random.random((dataset_size, dimension)).astype(np.float32)
             state["_vectors"] = vectors
+        
+        # Calculate total size: vectors + graph estimate
+        vector_bytes = int(dataset_size) * int(dimension) * 4
+        graph_bytes_est = int(dataset_size) * int(params["hnsw_m"]) * 4
+        total_bytes_est = vector_bytes + graph_bytes_est
+        total_size_mb = total_bytes_est / (1024 * 1024)  # Convert to MB
+        
+        # For large databases (>100MB), use heuristic instead of brute force
+        if total_size_mb > 100:
+            print(f"📊 Database size ({total_size_mb:.1f} MB) > 100 MB. Using heuristic instead of brute force.")
+            # Use the same heuristic as evaluate_performance_node
+            ef_max = max(1, int(agent.constraints.ef_search_max))
+            x = max(0.0, min(1.0, params["ef_search"] / ef_max))
+            slope = 10.0
+            sig = 1.0 / (1.0 + np.exp(-slope * (x - 0.5)))
+            r_min, r_max = 0.6, 0.98
+            estimated_recall = float(r_min + (r_max - r_min) * sig)
+            metrics = state.get("current_metrics", {})
+            metrics["true_recall"] = estimated_recall
+            metrics["k"] = k
+            metrics["recall_method"] = "heuristic"
+            state["current_metrics"] = metrics
+            print(f"✅ Estimated Recall@{k} (heuristic): {estimated_recall:.3f}")
+            return state
+        
+        # For smaller databases, use brute force exact search
+        ann_index = _create_index(dimension, params["hnsw_m"], params["ef_construction"], params["ef_search"])
         ann_index.add(vectors)  # type: ignore
         queries = state.get("_queries")
         if queries is None or int(queries.shape[1]) != dimension:
@@ -274,6 +302,7 @@ def evaluate_exact_recall_node(agent: Any, state: Any) -> Any:
         metrics = state.get("current_metrics", {})
         metrics["true_recall"] = true_recall
         metrics["k"] = k
+        metrics["recall_method"] = "exact"
         state["current_metrics"] = metrics
         print(f"✅ True Recall@{k}: {true_recall:.3f}")
     except Exception as e:

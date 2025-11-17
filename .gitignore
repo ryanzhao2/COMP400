@@ -2,6 +2,12 @@
 Ideas.txt
 paper/*
 
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
 # Generated FAISS index files (too large for Git)
 data/*.index
 data/hnsw.index

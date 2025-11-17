@@ -41,6 +41,9 @@ def load_past_log_trials(log_path: Optional[str], dim: Optional[int], size: Opti
         return []
     
     base_dir = os.path.dirname(log_path) or "."
+    # Ensure database_type subfolders are under "experiments/" folder
+    if base_dir == "." or "experiments" not in base_dir:
+        base_dir = "experiments"
     rows: List[Dict[str, Any]] = []
     
     database_type = database_type or "knowledge_reasoning"

@@ -24,7 +24,12 @@ class ArchivistAgent:
             database_type = record.get("database_type") or dataset.get("database_type") or "knowledge_reasoning"
             size = dataset.get("dataset_size")
             
-            # Create subfolder for database type
+            # Ensure database_type subfolders are under "experiments/" folder
+            # If base_dir is "." or doesn't contain "experiments", use "experiments" as base
+            if base_dir == "." or "experiments" not in base_dir:
+                base_dir = "experiments"
+            
+            # Create subfolder for database type under experiments/
             db_subfolder = os.path.join(base_dir, database_type)
             
             # Build filename: experiments_n{size}.jsonl (without database_type prefix since it's in subfolder)
