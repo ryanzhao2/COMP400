@@ -36,6 +36,7 @@ def load_experiments(log_path: str) -> pd.DataFrame:
                 "run_id": obj.get("run_id"),
                 "iteration": obj.get("iteration"),
                 "datetime": obj.get("datetime"),
+                "database_type": obj.get("database_type") or ds.get("database_type") or "knowledge_reasoning",
                 "dataset_size": ds.get("dataset_size"),
                 "dimension": ds.get("dimension"),
                 "hnsw_m": params.get("hnsw_m"),
@@ -199,6 +200,8 @@ def main() -> None:
     parser.add_argument("--out", default="plots", help="Output directory for plots")
     parser.add_argument("--hnsw_m", type=int, default=None, help="Clean filter: fixed hnsw_m")
     parser.add_argument("--ef_construction", type=int, default=None, help="Clean filter: fixed ef_construction")
+    parser.add_argument("--database-type", dest="database_type", type=str, default=None, 
+                       help="Filter by database type (knowledge_reasoning or memory_reaction)")
     parser.add_argument("--subset_name", default="fixed_params", help="Subfolder name for filtered (fixed-params) plots")
     args = parser.parse_args()
 
@@ -215,12 +218,27 @@ def main() -> None:
     for col in ["hnsw_m", "ef_construction", "ef_search", "index_size", "dataset_size", "dimension"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
+    
+    # Filter by database type if specified
+    if args.database_type:
+        if "database_type" not in df.columns:
+            print(f"Warning: database_type column not found in data. Cannot filter by database type.")
+        else:
+            available_types = sorted(df["database_type"].dropna().unique().tolist())
+            df = df[df["database_type"] == args.database_type].copy()
+            if df.empty:
+                print(f"No records found for database_type='{args.database_type}'. Available types: {available_types}")
+                return
+    
     # Helpful summary
     try:
         h_vals = sorted(df["hnsw_m"].dropna().unique().tolist()) if "hnsw_m" in df.columns else []
         ec_vals = sorted(df["ef_construction"].dropna().unique().tolist()) if "ef_construction" in df.columns else []
+        db_types = sorted(df["database_type"].dropna().unique().tolist()) if "database_type" in df.columns else []
         print(f"Available hnsw_m values: {h_vals}")
         print(f"Available ef_construction values: {ec_vals}")
+        if db_types:
+            print(f"Available database_type values: {db_types}")
     except Exception:
         pass
 

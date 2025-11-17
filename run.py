@@ -16,17 +16,23 @@ from vdb.agent import VectorDatabaseAgent
 
 def main() -> None:
     """Parse CLI arguments and run the optimization loop."""
+    from vdb.config import DATABASE_TYPES
+    
     parser = argparse.ArgumentParser(description="Run HNSW optimization experiments and log results.")
     parser.add_argument("--iterations", type=int, default=5, help="Max number of experiments to run")
     parser.add_argument("--log", default=os.getenv("EXPERIMENT_LOG", "experiments.jsonl"), help="Path to experiments JSONL log")
     parser.add_argument("--dataset-vectors", dest="dataset_vectors", default=None, help="Path to dataset vectors .npy file")
     parser.add_argument("--dataset-queries", dest="dataset_queries", default=None, help="Path to dataset queries .npy file")
+    parser.add_argument("--database-type", dest="database_type", default="knowledge_reasoning", 
+                       choices=list(DATABASE_TYPES.keys()),
+                       help="Database type: 'knowledge_reasoning' (high recall, slower) or 'memory_reaction' (low latency, fast)")
     args = parser.parse_args()
 
     agent = VectorDatabaseAgent(
         log_path=args.log,
         dataset_vectors_path=args.dataset_vectors,
         dataset_queries_path=args.dataset_queries,
+        database_type=args.database_type,
     )
 
     results = agent.optimize(max_iterations=args.iterations)

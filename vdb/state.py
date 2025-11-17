@@ -5,6 +5,7 @@ class OptimizationState(TypedDict):
     """State for the optimization workflow."""
     dataset_size: int
     dimension: int
+    database_type: str  # "knowledge_reasoning" or "memory_reaction"
     current_params: Dict[str, int]
     current_metrics: Dict[str, float]
     experiment_history: List[Dict[str, Any]]

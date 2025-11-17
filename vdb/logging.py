@@ -11,20 +11,28 @@ class ArchivistAgent:
 
     def _resolve_log_path(self, record: Dict[str, Any]) -> str:
         """
-        Resolve a dataset-specific JSONL path if dataset_size is present.
+        Resolve a database type and dataset-specific JSONL path in subfolders.
         Example:
           base: experiments/experiments.jsonl
-          dataset_size: 100000 -> experiments/experiments_n100000.jsonl
+          database_type: "knowledge_reasoning", dataset_size: 100000 
+          -> experiments/knowledge_reasoning/experiments_n100000.jsonl
         """
         try:
             base = self.log_path
             base_dir = os.path.dirname(base) or "."
             dataset = record.get("dataset", {}) or {}
+            database_type = record.get("database_type") or dataset.get("database_type") or "knowledge_reasoning"
             size = dataset.get("dataset_size")
+            
+            # Create subfolder for database type
+            db_subfolder = os.path.join(base_dir, database_type)
+            
+            # Build filename: experiments_n{size}.jsonl (without database_type prefix since it's in subfolder)
             if isinstance(size, int):
                 filename = f"experiments_n{size}.jsonl"
-                return os.path.join(base_dir, filename)
-            return base
+            else:
+                filename = "experiments.jsonl"
+            return os.path.join(db_subfolder, filename)
         except Exception:
             return self.log_path
 

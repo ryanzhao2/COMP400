@@ -44,6 +44,7 @@ def analyze_dataset_node(agent: Any, state: Any) -> Any:
 
     state["dataset_size"] = dataset_size
     state["dimension"] = dimension
+    state["database_type"] = state.get("database_type") or getattr(agent, "database_type", "knowledge_reasoning")
     state["_vectors"] = vectors
     state["_queries"] = queries
     state["status"] = "experimenting"
@@ -284,7 +285,8 @@ def update_best_config_node(agent: Any, state: Any) -> Any:
     print("🏆 Updating best configuration...")
     current_metrics = state["current_metrics"]
     current_params = state["current_params"]
-    if not state["best_config"] or agent._is_better_config(current_metrics, state["best_config"].get("metrics", {})):
+    phase = state.get("phase", "recall")
+    if not state["best_config"] or agent._is_better_config(current_metrics, state["best_config"].get("metrics", {}), phase=phase):
         state["best_config"] = {
             "params": current_params.copy(),
             "metrics": current_metrics.copy(),
@@ -305,8 +307,9 @@ def update_best_config_node(agent: Any, state: Any) -> Any:
             ds = {
                 "dataset_size": state.get("dataset_size"),
                 "dimension": state.get("dimension"),
+                "database_type": state.get("database_type") or getattr(agent, "database_type", "knowledge_reasoning"),
             }
-            agent.archivist.log({"dataset": ds, **experiment})
+            agent.archivist.log({"database_type": state.get("database_type") or getattr(agent, "database_type", "knowledge_reasoning"), "dataset": ds, **experiment})
         except Exception as e:
             print(f"⚠️  Logging failed: {e}")
     state["iteration_count"] += 1

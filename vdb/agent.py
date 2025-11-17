@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional
 import numpy as np
 from dotenv import load_dotenv
-from vdb.config import ParameterConstraints, PerformanceThresholds
+from vdb.config import ParameterConstraints, PerformanceThresholds, get_database_config, DATABASE_TYPES
 from vdb.models import DistanceStats, TrialRecord, GraphData
 from vdb.io import load_graph_data_json
 from vdb.state import OptimizationState
@@ -65,6 +65,7 @@ class VectorDatabaseAgent:
         num_threads: Optional[int] = None,
         use_gpu_exact: Optional[bool] = None,
         initial_exploration_trials: int = 10,
+        database_type: str = "knowledge_reasoning",
     ):
         # LLM init
         self.genai_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
@@ -87,8 +88,18 @@ class VectorDatabaseAgent:
             except Exception as e:
                 print(f"⚠️  Failed to initialize Google GenAI client: {e}. Using heuristic fallback.")
 
-        self.constraints = constraints or ParameterConstraints()
-        self.thresholds = thresholds or PerformanceThresholds()
+        # Database type-specific configuration
+        self.database_type = database_type
+        db_config = get_database_config(database_type)
+        self.constraints = constraints or db_config.get("constraints", ParameterConstraints())
+        self.thresholds = thresholds or db_config.get("thresholds", PerformanceThresholds())
+        
+        # Print database type info
+        db_info = db_config.get("name", database_type)
+        db_desc = db_config.get("description", "")
+        print(f"📊 Database Type: {db_info}")
+        if db_desc:
+            print(f"   {db_desc}")
         self.run_id: Optional[str] = None
         self.archivist: Optional[ArchivistAgent] = ArchivistAgent(log_path or os.getenv("EXPERIMENT_LOG", "experiments.jsonl"), run_id=str(uuid.uuid4()))
         self.param_proposer = ParamProposerAgent(self)
@@ -138,7 +149,8 @@ class VectorDatabaseAgent:
         if self.include_past_log_history:
             try:
                 log_path = getattr(self.archivist, "log_path", os.getenv("EXPERIMENT_LOG", "experiments.jsonl")) if self.archivist is not None else os.getenv("EXPERIMENT_LOG", "experiments.jsonl")
-                past_log_trials = _prompt_load_past(log_path, state.get("dimension"), state.get("dataset_size"), limit=5)
+                database_type = state.get("database_type") or self.database_type
+                past_log_trials = _prompt_load_past(log_path, state.get("dimension"), state.get("dataset_size"), database_type=database_type, limit=5)
             except Exception:
                 past_log_trials = []
         prompt_text = _build_prompt(self, dict(state), recent_trials, past_log_trials)
@@ -289,17 +301,53 @@ class VectorDatabaseAgent:
         validated["ef_search"] = max(self.constraints.ef_search_min, min(self.constraints.ef_search_max, params.get("ef_search", 50)))
         return validated
 
-    def _is_better_config(self, current: Dict[str, float], best: Dict[str, float]) -> bool:
+    def _is_better_config(self, current: Dict[str, float], best: Dict[str, float], phase: str = "recall") -> bool:
+        """
+        Determine if current config is better than best config.
+        In recall phase: prioritize recall, then latency.
+        In latency phase: prioritize latency (if recall >= min), then recall.
+        """
         if not best:
             return True
-        if current["recall"] > best.get("recall", -1.0):
-            return True
-        elif current["recall"] == best.get("recall", -1.0):
-            if current["latency_ms"] < best.get("latency_ms", float("inf")):
+        
+        current_recall = current.get("recall", 0.0)
+        best_recall = best.get("recall", 0.0)
+        current_latency = current.get("latency_ms", float("inf"))
+        best_latency = best.get("latency_ms", float("inf"))
+        min_recall = self.thresholds.min_recall
+        
+        if phase == "latency":
+            # In latency phase: prioritize lower latency if recall is acceptable
+            # Accept if: (recall >= min AND latency is lower) OR (same latency but higher recall >= min)
+            if current_recall >= min_recall and best_recall >= min_recall:
+                # Both meet recall target - prioritize latency
+                if current_latency < best_latency:
+                    return True
+                elif current_latency == best_latency:
+                    # Same latency - prefer higher recall or lower memory
+                    if current_recall > best_recall:
+                        return True
+                    elif current_recall == best_recall:
+                        return current.get("memory_gb", float("inf")) < best.get("memory_gb", float("inf"))
+            elif current_recall >= min_recall:
+                # Current meets target, best doesn't
                 return True
-            elif current["latency_ms"] == best.get("latency_ms", float("inf")):
-                return current["memory_gb"] < best.get("memory_gb", float("inf"))
-        return False
+            elif best_recall < min_recall:
+                # Neither meets target - prefer higher recall
+                return current_recall > best_recall
+            # Best meets target, current doesn't
+            return False
+        else:
+            # In recall phase: prioritize recall first
+            if current_recall > best_recall:
+                return True
+            elif current_recall == best_recall:
+                # Same recall - prefer lower latency
+                if current_latency < best_latency:
+                    return True
+                elif current_latency == best_latency:
+                    return current.get("memory_gb", float("inf")) < best.get("memory_gb", float("inf"))
+            return False
 
     def _should_continue(self, state: OptimizationState) -> str:
         return "done" if state["status"] == "done" else "continue"
@@ -310,6 +358,7 @@ class VectorDatabaseAgent:
         initial_state = OptimizationState(
             dataset_size=0,
             dimension=0,
+            database_type=self.database_type,
             current_params={},
             current_metrics={},
             experiment_history=[],
