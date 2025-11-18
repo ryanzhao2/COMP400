@@ -26,11 +26,22 @@ def analyze_dataset_node(agent: Any, state: Any) -> Any:
         print(f"⚠️  Failed to load dataset from disk: {e}. Falling back to synthetic.")
 
     if vectors is None:
-        try:
-            dataset_size = int(os.getenv("DATASET_SIZE", "1000000"))
-        except Exception:
-            dataset_size = 10000
-        dimension = 128
+        # Get dataset size from config (database type specific) or environment variable
+        database_type = state.get("database_type") or getattr(agent, "database_type", "knowledge_reasoning")
+        from vdb.config import get_database_config
+        db_config = get_database_config(database_type)
+        
+        # Priority: environment variable > config > default
+        env_dataset_size = os.getenv("DATASET_SIZE")
+        if env_dataset_size:
+            try:
+                dataset_size = int(env_dataset_size)
+            except Exception:
+                dataset_size = db_config.get("dataset_size", 100000)
+        else:
+            dataset_size = db_config.get("dataset_size", 100000)
+        
+        dimension = db_config.get("dimension", 128)
         vectors = np.random.random((dataset_size, dimension)).astype(np.float32)
         queries = np.random.random((min(100, dataset_size), dimension)).astype(np.float32)
     else:

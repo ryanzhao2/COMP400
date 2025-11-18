@@ -27,6 +27,8 @@ DATABASE_TYPES: Dict[str, Dict[str, Any]] = {
     "knowledge_reasoning": {
         "name": "Knowledge + Reasoning DB",
         "description": "Retrieves broad context. Slow but extremely thorough. Supports deep reasoning tasks. Use when missing info = bad.",
+        "dataset_size": 100000,  # Default dataset size for synthetic data generation
+        "dimension": 128,  # Default vector dimension
         "thresholds": PerformanceThresholds(
             min_recall=0.90,  # Target: at least 0.90 recall, then optimize for latency
             max_latency_ms=200.0,  # Can tolerate higher latency for thoroughness
@@ -44,6 +46,8 @@ DATABASE_TYPES: Dict[str, Dict[str, Any]] = {
     "memory_reaction": {
         "name": "Memory + Reaction DB",
         "description": "Retrieves the strongest match fast. Very low latency. Supports decision-making or fast assistant behaviors. Use when speed = critical.",
+        "dataset_size": 100000,  # Default dataset size for synthetic data generation (smaller for faster experiments)
+        "dimension": 128,  # Default vector dimension
         "thresholds": PerformanceThresholds(
             min_recall=0.70,  # Target: at least 0.70 recall (don't care much about recall), then optimize for latency
             max_latency_ms=5.0,  # Very strict latency requirement - minimize latency
