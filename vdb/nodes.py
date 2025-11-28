@@ -1,3 +1,16 @@
+"""
+LangGraph workflow nodes for HNSW optimization.
+
+Each node performs a specific step in the optimization process:
+- analyze_dataset: Load/generate dataset and queries
+- generate_parameters: Propose next parameter configuration
+- build_index: Build HNSW index with current parameters
+- evaluate_performance: Measure latency and estimate recall
+- evaluate_exact_recall: Compute true recall via brute-force search
+- update_best_config: Track best configuration found so far
+- decide_next_action: Determine whether to continue or terminate
+"""
+
 from typing import Any, Dict, List, Optional
 import os
 import time
@@ -14,6 +27,12 @@ except Exception:
 
 
 def analyze_dataset_node(agent: Any, state: Any) -> Any:
+    """
+    Load or generate dataset vectors and queries.
+    
+    Initializes the optimization state with dataset metadata and prepares
+    vectors for index building and evaluation.
+    """
     print("🔍 Analyzing dataset...")
     vectors = None
     queries = None
@@ -67,6 +86,12 @@ def analyze_dataset_node(agent: Any, state: Any) -> Any:
 
 
 def _get_exploration_grid(agent: Any) -> List[Dict[str, int]]:
+    """
+    Generate a grid of parameter combinations for initial exploration.
+    
+    Creates diverse parameter settings to explore the search space
+    before switching to LLM-guided or focused optimization.
+    """
     c = agent.constraints
     m_candidates = [c.hnsw_m_min, 16, 32, 48, 64, c.hnsw_m_max]
     m_candidates = sorted({max(c.hnsw_m_min, min(c.hnsw_m_max, v)) for v in m_candidates})
@@ -102,8 +127,14 @@ def _get_exploration_grid(agent: Any) -> List[Dict[str, int]]:
 
 
 def generate_parameters_node(agent: Any, state: Any) -> Any:
+    """
+    Propose next set of HNSW parameters to evaluate.
+    
+    Uses exploration grid for initial trials, then switches to
+    LLM-guided or heuristic parameter generation.
+    """
     print("🧠 Generating parameters...")
-    exploring = state.get("exploration_count", 0) < getattr(agent, "initial_exploration_trials", 10)
+    exploring = state.get("exploration_count", 0) < getattr(agent, "initial_exploration_trials", 0)
     proposed = agent.param_proposer.propose(state) if not exploring else {}
     phase = state.get("phase", "recall")
     constraints = agent.constraints
@@ -145,6 +176,12 @@ def generate_parameters_node(agent: Any, state: Any) -> Any:
 
 
 def build_index_node(agent: Any, state: Any) -> Any:
+    """
+    Build HNSW index with current parameters.
+    
+    Creates a FAISS HNSW index and measures build time.
+    Stores the index in state for reuse in evaluate_performance_node.
+    """
     print("🔨 Building index...")
     try:
         params = state["current_params"]
@@ -159,6 +196,7 @@ def build_index_node(agent: Any, state: Any) -> Any:
         index.add(vectors)  # type: ignore
         build_ms = (time.time() - build_start) * 1000.0
         state["_last_build_ms"] = float(build_ms)
+        state["_index"] = index  # Store index in state for reuse
         print(f"🕒 Index build time: {build_ms:.1f} ms")
         print(f"✅ Index built with {dataset_size} vectors")
     except Exception as e:
@@ -169,27 +207,53 @@ def build_index_node(agent: Any, state: Any) -> Any:
 
 
 def evaluate_performance_node(agent: Any, state: Any) -> Any:
+    """
+    Measure performance metrics using the index built in build_index_node.
+    
+    Reuses the index from state if available, otherwise builds a new one.
+    Evaluates:
+    - Build time (from build_index_node or measured here)
+    - Query latency (averaged over query set)
+    - Memory usage (vectors + graph estimate)
+    - Estimated recall (heuristic)
+    """
     print("📊 Evaluating performance...")
     try:
         params = state["current_params"]
         dimension = state["dimension"]
         dataset_size = state["dataset_size"]
-        build_start = time.time()
-        index = _create_index(dimension, params["hnsw_m"], params["ef_construction"], params["ef_search"])
-        vectors = state.get("_vectors")
-        if vectors is None or int(vectors.shape[0]) != dataset_size:
-            vectors = np.random.random((dataset_size, dimension)).astype(np.float32)
-            state["_vectors"] = vectors
-        index.add(vectors)  # type: ignore
-        build_ms = (time.time() - build_start) * 1000.0
+        
+        # Reuse index from build_index_node if available ]
+        index = state.get("_index")
+        if index is not None:
+            build_ms = state.get("_last_build_ms", 0.0)
+            print(f"♻️  Reusing index from build_index_node (saved {build_ms:.1f} ms)")
+        else:
+            # Fallback: build index here if not already built
+            build_start = time.time()
+            index = _create_index(dimension, params["hnsw_m"], params["ef_construction"], params["ef_search"])
+            vectors = state.get("_vectors")
+            if vectors is None or int(vectors.shape[0]) != dataset_size:
+                vectors = np.random.random((dataset_size, dimension)).astype(np.float32)
+                state["_vectors"] = vectors
+            index.add(vectors)  # type: ignore
+            build_ms = (time.time() - build_start) * 1000.0
+            state["_index"] = index
         index_file_path = None
         index_file_bytes = None
+        # Persisting very large indexes (e.g., 10M vectors) can be slow. Only write to disk
+        # for smaller datasets and skip for large ones to speed up experiments.
         try:
-            index_file_path = os.getenv("INDEX_FILE_PATH", os.path.join("data", "hnsw.index"))
-            index_file_bytes = _persist_index(index, index_file_path)
+            dataset_size_int = int(dataset_size)
         except Exception:
-            index_file_path = None
-            index_file_bytes = None
+            dataset_size_int = dataset_size
+        if dataset_size_int <= 1_000_000:
+            try:
+                index_file_path = os.getenv("INDEX_FILE_PATH", os.path.join("data", "hnsw.index"))
+                index_file_bytes = _persist_index(index, index_file_path)
+            except Exception:
+                index_file_path = None
+                index_file_bytes = None
         queries = state.get("_queries")
         if queries is None or int(queries.shape[1]) != dimension:
             num_queries = min(200, dataset_size)
@@ -234,6 +298,12 @@ def evaluate_performance_node(agent: Any, state: Any) -> Any:
 
 
 def evaluate_exact_recall_node(agent: Any, state: Any) -> Any:
+    """
+    Compute true recall@k using brute-force exact search.
+    
+    For small datasets (<100MB), performs exhaustive search to measure
+    actual recall. For larger datasets, uses heuristic to avoid expensive computation.
+    """
     print("🎯 Computing exact recall@k...")
     try:
         params = state["current_params"]
@@ -254,7 +324,7 @@ def evaluate_exact_recall_node(agent: Any, state: Any) -> Any:
         total_size_mb = total_bytes_est / (1024 * 1024)  # Convert to MB
         
         # For large databases (>100MB), use heuristic instead of brute force
-        if total_size_mb > 100:
+        if total_size_mb > 1024:
             print(f"📊 Database size ({total_size_mb:.1f} MB) > 100 MB. Using heuristic instead of brute force.")
             # Use the same heuristic as evaluate_performance_node
             ef_max = max(1, int(agent.constraints.ef_search_max))
@@ -272,8 +342,13 @@ def evaluate_exact_recall_node(agent: Any, state: Any) -> Any:
             return state
         
         # For smaller databases, use brute force exact search
-        ann_index = _create_index(dimension, params["hnsw_m"], params["ef_construction"], params["ef_search"])
-        ann_index.add(vectors)  # type: ignore
+        # Reuse index from build_index_node if available (saves rebuild time)
+        ann_index = state.get("_index")
+        if ann_index is None:
+            # Build new index if not already in state
+            ann_index = _create_index(dimension, params["hnsw_m"], params["ef_construction"], params["ef_search"])
+            ann_index.add(vectors)  # type: ignore
+        # If index was reused from state, vectors are already added in build_index_node
         queries = state.get("_queries")
         if queries is None or int(queries.shape[1]) != dimension:
             num_queries = min(200, dataset_size)
@@ -311,7 +386,11 @@ def evaluate_exact_recall_node(agent: Any, state: Any) -> Any:
             recalls.append(inter / k)
         true_recall = float(np.mean(recalls))
         metrics = state.get("current_metrics", {})
+        # For smaller datasets where we can afford exact search, treat true_recall
+        # as the primary recall metric so that logs and downstream analysis reflect
+        # actual accuracy rather than the heuristic estimate.
         metrics["true_recall"] = true_recall
+        metrics["recall"] = true_recall
         metrics["k"] = k
         metrics["recall_method"] = "exact"
         state["current_metrics"] = metrics
@@ -322,6 +401,12 @@ def evaluate_exact_recall_node(agent: Any, state: Any) -> Any:
 
 
 def update_best_config_node(agent: Any, state: Any) -> Any:
+    """
+    Update best configuration and log experiment results.
+    
+    Compares current metrics against best known configuration and
+    records all trials to JSONL log for analysis.
+    """
     print("🏆 Updating best configuration...")
     current_metrics = state["current_metrics"]
     current_params = state["current_params"]
@@ -357,13 +442,21 @@ def update_best_config_node(agent: Any, state: Any) -> Any:
 
 
 def decide_next_action_node(agent: Any, state: Any) -> Any:
+    """
+    Decide whether to continue optimization or terminate.
+    
+    Checks:
+    - Maximum experiments reached
+    - Phase transitions (recall -> latency)
+    - Performance targets met
+    """
     print("🤔 Deciding next action...")
     if state["iteration_count"] >= agent.thresholds.max_experiments:
         print("🛑 Maximum experiments reached")
         state["status"] = "done"
         return state
     exploration_count = int(state.get("exploration_count", 0))
-    if exploration_count < getattr(agent, "initial_exploration_trials", 5):
+    if exploration_count < getattr(agent, "initial_exploration_trials", 0):
         state["status"] = "experimenting"
         return state
     current_metrics = state["current_metrics"]

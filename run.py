@@ -1,11 +1,18 @@
 """
-CLI entrypoint to run the VectorDatabaseAgent optimization and log experiments.
+CLI entrypoint for HNSW parameter optimization.
+
+Runs the VectorDatabaseAgent to automatically tune FAISS HNSW parameters,
+logging all experiments for analysis and visualization.
 
 Usage examples:
-  python run.py --iterations 5 --log experiments.jsonl
-  python run.py --iterations 5 --log experiments.jsonl \
-    --dataset-vectors data/gaussian_n10000_d128_k8_std0.1.npy \
-    --dataset-queries data/gaussian_n10000_d128_k8_std0.1_queries.npy
+  # Basic run with synthetic data
+  python run.py --iterations 20 --database-type knowledge_reasoning
+  
+  # Run with custom dataset
+  python run.py --iterations 20 \
+    --dataset-vectors data/gaussian_n100000_d128_k8_std0.1.npy \
+    --dataset-queries data/gaussian_n100000_d128_k8_std0.1_queries.npy \
+    --database-type memory_reaction
 """
 
 import os

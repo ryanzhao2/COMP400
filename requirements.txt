@@ -1,11 +1,24 @@
-faiss-cpu
-numpy
-langgraph
-langchain
-langchain-community
-langchain-google-genai
-google-genai
-python-dotenv
-pandas
-matplotlib
-seaborn
+# Core dependencies
+numpy>=1.24.0
+pandas>=2.0.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# LangGraph and AI
+langgraph>=0.2.0
+langchain-core>=0.1.0
+langchain-google-genai>=0.0.11
+
+# Google AI
+google-generativeai>=0.3.0
+
+# FAISS for vector similarity search
+faiss-cpu>=1.7.4
+# OR for GPU support: faiss-gpu>=1.7.4
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# Type hints and development
+typing-extensions>=4.8.0
+

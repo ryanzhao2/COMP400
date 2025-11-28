@@ -1,5 +1,18 @@
+"""
+Utility functions for formatting and display.
+"""
+
+
 def format_bytes(num: int) -> str:
-    """Format a byte count as a human-readable string."""
+    """
+    Format byte count as human-readable string with appropriate units.
+    
+    Args:
+        num: Byte count
+        
+    Returns:
+        Formatted string like "15.32 MB" or "2.45 GB"
+    """
     try:
         n = float(num)
     except Exception:

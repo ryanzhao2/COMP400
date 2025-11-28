@@ -1,21 +1,32 @@
+"""
+Experiment logging and archival.
+
+The ArchivistAgent records all experiments to organized JSONL files,
+with automatic folder structure: experiments/{database_type}/experiments_n{size}.jsonl
+"""
+
 from typing import Optional, Dict, Any
 import os
 import json
 
 
 class ArchivistAgent:
-    """Append experiment records to a JSONL file with a run_id."""
+    """
+    Records experiment results to JSONL log files.
+    
+    Automatically organizes logs by database type and dataset size
+    for easy analysis and visualization.
+    """
     def __init__(self, log_path: Optional[str], run_id: str):
         self.log_path = log_path or os.getenv("EXPERIMENT_LOG", "experiments.jsonl")
         self.run_id = run_id
 
     def _resolve_log_path(self, record: Dict[str, Any]) -> str:
         """
-        Resolve a database type and dataset-specific JSONL path in subfolders.
-        Example:
-          base: experiments/experiments.jsonl
-          database_type: "knowledge_reasoning", dataset_size: 100000 
-          -> experiments/knowledge_reasoning/experiments_n100000.jsonl
+        Determine target log file path based on experiment metadata.
+        
+        Organizes logs into: experiments/{database_type}/experiments_n{size}.jsonl
+        This structure enables efficient filtering and comparison across runs.
         """
         try:
             base = self.log_path

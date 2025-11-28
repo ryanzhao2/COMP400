@@ -1,9 +1,20 @@
+"""
+Prompt engineering utilities for LLM-guided parameter tuning.
+
+Constructs prompts that provide the LLM with:
+- Recent trial history from current run
+- Past trial history from log files
+- Performance targets and constraints
+- Current optimization phase and goals
+"""
+
 from typing import Any, Dict, List, Optional
 import os
 import json
 
 
 def get_recent_trials(state: Dict[str, Any], n: int) -> List[Dict[str, Any]]:
+    """Extract last n trials from current optimization state."""
     trials_src = state.get("experiment_history", [])
     if not trials_src or n <= 0:
         return []
@@ -30,12 +41,14 @@ def get_recent_trials(state: Dict[str, Any], n: int) -> List[Dict[str, Any]]:
 
 def load_past_log_trials(log_path: Optional[str], dim: Optional[int], size: Optional[int], database_type: Optional[str] = None, limit: int = 5) -> List[Dict[str, Any]]:
     """
-    Load past trials from log files, prioritizing similar dataset sizes and database types.
+    Load past trials from log files for LLM context.
     
-    Strategy:
-    1. Try exact database_type + size match first (if type-specific file exists)
-    2. If not enough, search other type-specific files, sorted by closest dataset_size
-    3. Filter by dimension (exact match required) and database_type (exact match preferred)
+    Intelligently searches for relevant past experiments by:
+    1. Exact database_type + size match (highest priority)
+    2. Similar dataset sizes from same database_type
+    3. Similar sizes from other database types (fallback)
+    
+    Filters require exact dimension match and prefer matching database_type.
     """
     if not log_path:
         return []
@@ -182,6 +195,12 @@ def load_past_log_trials(log_path: Optional[str], dim: Optional[int], size: Opti
 
 
 def build_tuning_prompt(agent: Any, state: Dict[str, Any], recent_trials: List[Dict[str, Any]], past_log_trials: List[Dict[str, Any]]) -> str:
+    """
+    Construct the complete prompt for LLM-guided parameter tuning.
+    
+    Includes optimization goals, constraints, targets, trial history, and
+    phase-specific instructions for the LLM.
+    """
     database_type = state.get("database_type") or getattr(agent, "database_type", "knowledge_reasoning")
     phase = state.get("phase", "recall")
     db_name = "Knowledge + Reasoning DB" if database_type == "knowledge_reasoning" else "Memory + Reaction DB"

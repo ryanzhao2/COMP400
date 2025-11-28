@@ -1,9 +1,17 @@
+"""
+Serialization utilities for graph data and trial records.
+
+Handles conversion between GraphData objects (used in code) and
+JSON dictionaries (for persistence and LLM communication).
+"""
+
 from typing import Dict, Any, List
 from .models import GraphData, DistanceStats, TrialRecord
 import json
 
 
 def graph_data_to_dict(graph: GraphData) -> Dict[str, Any]:
+    """Convert GraphData object to JSON-serializable dictionary."""
     return {
         "dataset_size": graph.dataset_size,
         "dimension": graph.dimension,

@@ -1,5 +1,10 @@
 """
-Agent orchestration for FAISS HNSW optimization.
+Agent orchestration for FAISS HNSW parameter optimization.
+
+This module implements an intelligent agent system using LangGraph that automatically
+tunes HNSW (Hierarchical Navigable Small World) index parameters for optimal vector
+database performance. The agent balances recall, latency, and memory usage through
+iterative experimentation and optional LLM-guided parameter selection.
 """
 
 import os
@@ -43,17 +48,35 @@ load_dotenv()
 
 
 class ParamProposerAgent:
+    """
+    Proposes HNSW parameters for the next experiment.
+    
+    Delegates to LLM-based generation when available, otherwise uses heuristic fallback.
+    """
     def __init__(self, parent: "VectorDatabaseAgent"):
         self.parent = parent
 
     def propose(self, state: "OptimizationState") -> Dict[str, int]:
+        """Generate parameter proposal based on current state and history."""
         if self.parent.lc_llm or self.parent.genai_client:
             return self.parent._generate_llm_parameters(state)
         return self.parent._generate_fallback_parameters(state)
 
 
 class VectorDatabaseAgent:
-    """Basic agent for vector database optimization"""
+    """
+    Main agent for automated FAISS HNSW parameter optimization.
+    
+    Uses LangGraph to orchestrate a multi-step workflow that:
+    1. Analyzes the dataset characteristics
+    2. Proposes parameters (LLM-guided or heuristic)
+    3. Builds and evaluates HNSW indexes
+    4. Iteratively improves configuration to meet performance targets
+    
+    The agent supports two optimization modes:
+    - knowledge_reasoning: Prioritizes high recall for thorough retrieval
+    - memory_reaction: Prioritizes low latency for fast response
+    """
     def __init__(
         self,
         openai_api_key: Optional[str] = None,
@@ -64,7 +87,7 @@ class VectorDatabaseAgent:
         dataset_queries_path: Optional[str] = None,
         num_threads: Optional[int] = None,
         use_gpu_exact: Optional[bool] = None,
-        initial_exploration_trials: int = 10,
+        initial_exploration_trials: int = 0,
         database_type: str = "knowledge_reasoning",
     ):
         # LLM init
@@ -113,7 +136,7 @@ class VectorDatabaseAgent:
             self.llm_history_trials = int(os.getenv("LLM_HISTORY_TRIALS", "5"))
         except Exception:
             self.llm_history_trials = 5
-        self.include_past_log_history = os.getenv("INCLUDE_PAST_LOG_HISTORY", "0").lower() in ("1", "true", "yes")
+        self.include_past_log_history = os.getenv("INCLUDE_PAST_LOG_HISTORY", "1").lower() in ("1", "true", "yes")
 
         self.workflow = self._build_workflow()
 
@@ -140,8 +163,13 @@ class VectorDatabaseAgent:
         )
         return workflow.compile()
 
-    # Helper methods
     def _generate_llm_parameters(self, state: OptimizationState) -> Dict[str, int]:
+        """
+        Generate HNSW parameters using LLM (Gemini) based on optimization history.
+        
+        The LLM receives context about past trials, current phase, and performance targets
+        to suggest intelligent parameter choices.
+        """
         if not (self.lc_llm or self.genai_client):
             return self._generate_fallback_parameters(state)
         recent_trials = _prompt_get_recent_trials(dict(state), max(0, int(getattr(self, "llm_history_trials", 5))))
@@ -275,6 +303,11 @@ class VectorDatabaseAgent:
         return self.recommend_parameters_from_graph(graph)
 
     def _generate_fallback_parameters(self, state: OptimizationState) -> Dict[str, int]:
+        """
+        Generate parameters using simple heuristics when LLM is unavailable.
+        
+        Uses preset values for first few iterations, then random search within constraints.
+        """
         import random
         iteration = state["iteration_count"]
         if iteration == 0:
@@ -303,9 +336,18 @@ class VectorDatabaseAgent:
 
     def _is_better_config(self, current: Dict[str, float], best: Dict[str, float], phase: str = "recall") -> bool:
         """
-        Determine if current config is better than best config.
-        In recall phase: prioritize recall, then latency.
-        In latency phase: prioritize latency (if recall >= min), then recall.
+        Determine if current config is better than best config based on optimization phase.
+        
+        Recall phase: Prioritize higher recall, then lower latency as tiebreaker
+        Latency phase: Prioritize lower latency while maintaining minimum recall threshold
+        
+        Args:
+            current: Current experiment metrics
+            best: Best known metrics so far
+            phase: Optimization phase ("recall" or "latency")
+            
+        Returns:
+            True if current config should replace best config
         """
         if not best:
             return True
@@ -353,6 +395,15 @@ class VectorDatabaseAgent:
         return "done" if state["status"] == "done" else "continue"
 
     def optimize(self, max_iterations: int = 10) -> Dict[str, Any]:
+        """
+        Run the optimization workflow to find best HNSW parameters.
+        
+        Args:
+            max_iterations: Maximum number of experiments to run
+            
+        Returns:
+            Final optimization state with best configuration and history
+        """
         print("🚀 Starting vector database optimization...")
         self.thresholds.max_experiments = max_iterations
         initial_state = OptimizationState(
@@ -368,6 +419,7 @@ class VectorDatabaseAgent:
             error_message=None,
             _vectors=None,
             _queries=None,
+            _index=None,
             _last_build_ms=None,
             phase="recall",
             tried_params=[],
@@ -385,6 +437,12 @@ class VectorDatabaseAgent:
 
 
 def generate_dummy_graph_data(dataset_size: int = 5000, dimension: int = 128, num_trials: int = 6) -> GraphData:
+    """
+    Generate synthetic graph data for testing and demonstration.
+    
+    Creates fake trial results with realistic metrics based on parameter values.
+    Useful for testing LLM recommendation logic without running real experiments.
+    """
     sample_vectors = np.random.random((min(dataset_size, 2000), dimension)).astype(np.float32)
     sample = sample_vectors[:256]
     norms = np.linalg.norm(sample, axis=1, keepdims=True) + 1e-9
