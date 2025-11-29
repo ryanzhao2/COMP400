@@ -104,12 +104,12 @@ class VectorDatabaseAgent:
                 except Exception:
                     self.lc_llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro", temperature=0.1, google_api_key=gemini_key)
             except Exception as e:
-                print(f"⚠️  Failed to initialize LangChain Gemini: {e}. Will try direct client.")
+                print(f"Warning: Failed to initialize LangChain Gemini: {e}. Will try direct client.")
         if gemini_key and self.lc_llm is None and genai is not None:
             try:
                 self.genai_client = genai.Client(api_key=gemini_key)
             except Exception as e:
-                print(f"⚠️  Failed to initialize Google GenAI client: {e}. Using heuristic fallback.")
+                print(f"Warning: Failed to initialize Google GenAI client: {e}. Using heuristic fallback.")
 
         # Database type-specific configuration
         self.database_type = database_type
@@ -120,7 +120,7 @@ class VectorDatabaseAgent:
         # Print database type info
         db_info = db_config.get("name", database_type)
         db_desc = db_config.get("description", "")
-        print(f"📊 Database Type: {db_info}")
+        print(f"Database Type: {db_info}")
         if db_desc:
             print(f"   {db_desc}")
         self.run_id: Optional[str] = None
@@ -404,7 +404,7 @@ class VectorDatabaseAgent:
         Returns:
             Final optimization state with best configuration and history
         """
-        print("🚀 Starting vector database optimization...")
+        print("Starting vector database optimization...")
         self.thresholds.max_experiments = max_iterations
         initial_state = OptimizationState(
             dataset_size=0,
@@ -427,10 +427,10 @@ class VectorDatabaseAgent:
         )
         recursion_limit = max(100, int(self.thresholds.max_experiments) * 10)
         final_state = self.workflow.invoke(initial_state, config={"recursion_limit": recursion_limit})
-        print(f"🏁 Optimization completed")
-        print(f"📊 Total experiments: {final_state['iteration_count']}")
+        print(f"Optimization completed")
+        print(f"Total experiments: {final_state['iteration_count']}")
         if final_state["best_config"]:
-            print(f"🎯 Best configuration:")
+            print(f"Best configuration:")
             print(f"   Parameters: {final_state['best_config']['params']}")
             print(f"   Metrics: {final_state['best_config']['metrics']}")
         return final_state

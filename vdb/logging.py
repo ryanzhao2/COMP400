@@ -60,6 +60,6 @@ class ArchivistAgent:
             with open(target_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(enriched) + "\n")
         except Exception as e:
-            print(f"⚠️  Failed to write experiment record: {e}")
+            print(f"Warning: Failed to write experiment record: {e}")
 
 

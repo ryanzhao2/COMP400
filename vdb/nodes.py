@@ -33,7 +33,7 @@ def analyze_dataset_node(agent: Any, state: Any) -> Any:
     Initializes the optimization state with dataset metadata and prepares
     vectors for index building and evaluation.
     """
-    print("🔍 Analyzing dataset...")
+    print("Analyzing dataset...")
     vectors = None
     queries = None
     try:
@@ -42,7 +42,7 @@ def analyze_dataset_node(agent: Any, state: Any) -> Any:
             if agent.dataset_queries_path and os.path.isfile(agent.dataset_queries_path):
                 queries = np.load(agent.dataset_queries_path).astype(np.float32)
     except Exception as e:
-        print(f"⚠️  Failed to load dataset from disk: {e}. Falling back to synthetic.")
+        print(f"Warning: Failed to load dataset from disk: {e}. Falling back to synthetic.")
 
     if vectors is None:
         # Get dataset size from config (database type specific) or environment variable
@@ -81,7 +81,7 @@ def analyze_dataset_node(agent: Any, state: Any) -> Any:
     state["phase"] = state.get("phase") or "recall"
     state["tried_params"] = state.get("tried_params", [])
     state["exploration_count"] = int(state.get("exploration_count", 0))
-    print(f"📊 Dataset: {dataset_size} vectors, {dimension}D")
+    print(f"Dataset: {dataset_size} vectors, {dimension}D")
     return state
 
 
@@ -133,7 +133,7 @@ def generate_parameters_node(agent: Any, state: Any) -> Any:
     Uses exploration grid for initial trials, then switches to
     LLM-guided or heuristic parameter generation.
     """
-    print("🧠 Generating parameters...")
+    print("Generating parameters...")
     exploring = state.get("exploration_count", 0) < getattr(agent, "initial_exploration_trials", 0)
     proposed = agent.param_proposer.propose(state) if not exploring else {}
     phase = state.get("phase", "recall")
@@ -171,7 +171,7 @@ def generate_parameters_node(agent: Any, state: Any) -> Any:
     state["current_params"] = candidate
     tried.append(candidate.copy())
     state["tried_params"] = tried
-    print(f"🎯 Generated params ({'explore' if exploring else phase} phase): {state['current_params']}")
+    print(f"Generated params ({'explore' if exploring else phase} phase): {state['current_params']}")
     return state
 
 
@@ -182,7 +182,7 @@ def build_index_node(agent: Any, state: Any) -> Any:
     Creates a FAISS HNSW index and measures build time.
     Stores the index in state for reuse in evaluate_performance_node.
     """
-    print("🔨 Building index...")
+    print("Building index...")
     try:
         params = state["current_params"]
         dimension = state["dimension"]
@@ -197,10 +197,10 @@ def build_index_node(agent: Any, state: Any) -> Any:
         build_ms = (time.time() - build_start) * 1000.0
         state["_last_build_ms"] = float(build_ms)
         state["_index"] = index  # Store index in state for reuse
-        print(f"🕒 Index build time: {build_ms:.1f} ms")
-        print(f"✅ Index built with {dataset_size} vectors")
+        print(f"Index build time: {build_ms:.1f} ms")
+        print(f"Index built with {dataset_size} vectors")
     except Exception as e:
-        print(f"❌ Error building index: {e}")
+        print(f"Error building index: {e}")
         state["error_message"] = f"Index building failed: {str(e)}"
         state["status"] = "error"
     return state
@@ -217,7 +217,7 @@ def evaluate_performance_node(agent: Any, state: Any) -> Any:
     - Memory usage (vectors + graph estimate)
     - Estimated recall (heuristic)
     """
-    print("📊 Evaluating performance...")
+    print("Evaluating performance...")
     try:
         params = state["current_params"]
         dimension = state["dimension"]
@@ -227,17 +227,17 @@ def evaluate_performance_node(agent: Any, state: Any) -> Any:
         index = state.get("_index")
         if index is not None:
             build_ms = state.get("_last_build_ms", 0.0)
-            print(f"♻️  Reusing index from build_index_node (saved {build_ms:.1f} ms)")
+            print(f"Reusing index from build_index_node (saved {build_ms:.1f} ms)")
         else:
             # Fallback: build index here if not already built
-            build_start = time.time()
-            index = _create_index(dimension, params["hnsw_m"], params["ef_construction"], params["ef_search"])
-            vectors = state.get("_vectors")
-            if vectors is None or int(vectors.shape[0]) != dataset_size:
-                vectors = np.random.random((dataset_size, dimension)).astype(np.float32)
-                state["_vectors"] = vectors
-            index.add(vectors)  # type: ignore
-            build_ms = (time.time() - build_start) * 1000.0
+        build_start = time.time()
+        index = _create_index(dimension, params["hnsw_m"], params["ef_construction"], params["ef_search"])
+        vectors = state.get("_vectors")
+        if vectors is None or int(vectors.shape[0]) != dataset_size:
+            vectors = np.random.random((dataset_size, dimension)).astype(np.float32)
+            state["_vectors"] = vectors
+        index.add(vectors)  # type: ignore
+        build_ms = (time.time() - build_start) * 1000.0
             state["_index"] = index
         index_file_path = None
         index_file_bytes = None
@@ -248,12 +248,12 @@ def evaluate_performance_node(agent: Any, state: Any) -> Any:
         except Exception:
             dataset_size_int = dataset_size
         if dataset_size_int <= 1_000_000:
-            try:
-                index_file_path = os.getenv("INDEX_FILE_PATH", os.path.join("data", "hnsw.index"))
-                index_file_bytes = _persist_index(index, index_file_path)
-            except Exception:
-                index_file_path = None
-                index_file_bytes = None
+        try:
+            index_file_path = os.getenv("INDEX_FILE_PATH", os.path.join("data", "hnsw.index"))
+            index_file_bytes = _persist_index(index, index_file_path)
+        except Exception:
+            index_file_path = None
+            index_file_bytes = None
         queries = state.get("_queries")
         if queries is None or int(queries.shape[1]) != dimension:
             num_queries = min(200, dataset_size)
@@ -289,9 +289,9 @@ def evaluate_performance_node(agent: Any, state: Any) -> Any:
             "total_size_est": _format_bytes(int(total_bytes_est))
         }
         state["current_metrics"] = metrics
-        print(f"📈 Metrics: Recall={metrics['recall']:.3f}, Latency={metrics['latency_ms']:.1f}ms, Memory={metrics['memory_gb']:.2f}GB")
+        print(f"Metrics: Recall={metrics['recall']:.3f}, Latency={metrics['latency_ms']:.1f}ms, Memory={metrics['memory_gb']:.2f}GB")
     except Exception as e:
-        print(f"❌ Error evaluating performance: {e}")
+        print(f"Error evaluating performance: {e}")
         state["error_message"] = f"Performance evaluation failed: {str(e)}"
         state["status"] = "error"
     return state
@@ -304,7 +304,7 @@ def evaluate_exact_recall_node(agent: Any, state: Any) -> Any:
     For small datasets (<100MB), performs exhaustive search to measure
     actual recall. For larger datasets, uses heuristic to avoid expensive computation.
     """
-    print("🎯 Computing exact recall@k...")
+    print("Computing exact recall@k...")
     try:
         params = state["current_params"]
         dimension = state["dimension"]
@@ -325,7 +325,7 @@ def evaluate_exact_recall_node(agent: Any, state: Any) -> Any:
         
         # For large databases (>100MB), use heuristic instead of brute force
         if total_size_mb > 1024:
-            print(f"📊 Database size ({total_size_mb:.1f} MB) > 100 MB. Using heuristic instead of brute force.")
+            print(f"Database size ({total_size_mb:.1f} MB) > 100 MB. Using heuristic instead of brute force.")
             # Use the same heuristic as evaluate_performance_node
             ef_max = max(1, int(agent.constraints.ef_search_max))
             x = max(0.0, min(1.0, params["ef_search"] / ef_max))
@@ -338,7 +338,7 @@ def evaluate_exact_recall_node(agent: Any, state: Any) -> Any:
             metrics["k"] = k
             metrics["recall_method"] = "heuristic"
             state["current_metrics"] = metrics
-            print(f"✅ Estimated Recall@{k} (heuristic): {estimated_recall:.3f}")
+            print(f"Estimated Recall@{k} (heuristic): {estimated_recall:.3f}")
             return state
         
         # For smaller databases, use brute force exact search
@@ -346,8 +346,8 @@ def evaluate_exact_recall_node(agent: Any, state: Any) -> Any:
         ann_index = state.get("_index")
         if ann_index is None:
             # Build new index if not already in state
-            ann_index = _create_index(dimension, params["hnsw_m"], params["ef_construction"], params["ef_search"])
-            ann_index.add(vectors)  # type: ignore
+        ann_index = _create_index(dimension, params["hnsw_m"], params["ef_construction"], params["ef_search"])
+        ann_index.add(vectors)  # type: ignore
         # If index was reused from state, vectors are already added in build_index_node
         queries = state.get("_queries")
         if queries is None or int(queries.shape[1]) != dimension:
@@ -394,9 +394,9 @@ def evaluate_exact_recall_node(agent: Any, state: Any) -> Any:
         metrics["k"] = k
         metrics["recall_method"] = "exact"
         state["current_metrics"] = metrics
-        print(f"✅ True Recall@{k}: {true_recall:.3f}")
+        print(f"True Recall@{k}: {true_recall:.3f}")
     except Exception as e:
-        print(f"❌ Error computing exact recall: {e}")
+        print(f"Error computing exact recall: {e}")
     return state
 
 
@@ -407,7 +407,7 @@ def update_best_config_node(agent: Any, state: Any) -> Any:
     Compares current metrics against best known configuration and
     records all trials to JSONL log for analysis.
     """
-    print("🏆 Updating best configuration...")
+    print("Updating best configuration...")
     current_metrics = state["current_metrics"]
     current_params = state["current_params"]
     phase = state.get("phase", "recall")
@@ -417,7 +417,7 @@ def update_best_config_node(agent: Any, state: Any) -> Any:
             "metrics": current_metrics.copy(),
             "iteration": state["iteration_count"]
         }
-        print("🎉 New best configuration found!")
+        print("New best configuration found!")
     experiment = {
         "iteration": state["iteration_count"],
         "params": current_params.copy(),
@@ -436,7 +436,7 @@ def update_best_config_node(agent: Any, state: Any) -> Any:
             }
             agent.archivist.log({"database_type": state.get("database_type") or getattr(agent, "database_type", "knowledge_reasoning"), "dataset": ds, **experiment})
         except Exception as e:
-            print(f"⚠️  Logging failed: {e}")
+            print(f"Warning: Logging failed: {e}")
     state["iteration_count"] += 1
     return state
 
@@ -450,9 +450,9 @@ def decide_next_action_node(agent: Any, state: Any) -> Any:
     - Phase transitions (recall -> latency)
     - Performance targets met
     """
-    print("🤔 Deciding next action...")
+    print("Deciding next action...")
     if state["iteration_count"] >= agent.thresholds.max_experiments:
-        print("🛑 Maximum experiments reached")
+        print("Maximum experiments reached")
         state["status"] = "done"
         return state
     exploration_count = int(state.get("exploration_count", 0))
@@ -462,12 +462,12 @@ def decide_next_action_node(agent: Any, state: Any) -> Any:
     current_metrics = state["current_metrics"]
     phase = state.get("phase", "recall")
     if phase == "recall" and current_metrics.get("recall", 0.0) >= agent.thresholds.min_recall:
-        print("✅ Recall target met. Switching to latency optimization phase.")
+        print("Recall target met. Switching to latency optimization phase.")
         state["phase"] = "latency"
         state["status"] = "experimenting"
         return state
     if phase == "latency" and current_metrics.get("recall", 0.0) < agent.thresholds.min_recall:
-        print("⚠️  Recall dropped below target. Returning to recall phase.")
+        print("Warning: Recall dropped below target. Returning to recall phase.")
         state["phase"] = "recall"
         state["status"] = "experimenting"
         return state

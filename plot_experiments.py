@@ -254,7 +254,7 @@ def main() -> None:
     df = load_experiments_from_path(args.log)
     if df.empty:
         print("No records found. Nothing to plot.")
-        print(f"\n💡 Tip: If you're looking for experiment files, try:")
+        print(f"\nIf you're looking for experiment files, try:")
         print(f"   --log experiments/  (to load all experiment files)")
         print(f"   --log experiments/knowledge_reasoning/  (to load knowledge_reasoning experiments)")
         print(f"   --log experiments/memory_reaction/  (to load memory_reaction experiments)")
@@ -290,7 +290,7 @@ def main() -> None:
     # Organize plots by database type
     if "database_type" in df.columns and df["database_type"].notna().any():
         db_types = sorted(df["database_type"].dropna().unique().tolist())
-        print(f"\n📊 Organizing plots by database type: {db_types}")
+        print(f"\nOrganizing plots by database type: {db_types}")
         
         for db_type in db_types:
             db_df = df[df["database_type"] == db_type].copy()
@@ -327,12 +327,12 @@ def main() -> None:
                     plot_estimated_variants(clean_df, clean_dir)
                     print(f"    Saved filtered plots to: {clean_dir}")
             
-            print(f"  ✅ Saved plots for '{db_type}' to: {os.path.abspath(db_dir)}")
+            print(f"  Saved plots for '{db_type}' to: {os.path.abspath(db_dir)}")
     else:
         # Fallback: if no database_type, save to experimental folder (backward compatibility)
         exp_dir = os.path.join(args.out, "experimental")
         ensure_out_dir(exp_dir)
-        print("\n📊 No database_type found, saving to experimental/ folder")
+        print("\nNo database_type found, saving to experimental/ folder")
         plot_recall_latency(df, exp_dir)
         plot_pareto(df, exp_dir)
         if "ef_search" in df.columns and df["ef_search"].notna().any():
@@ -369,11 +369,11 @@ def main() -> None:
                 plot_true_vs_estimated(clean_df, clean_dir)
                 plot_estimated_variants(clean_df, clean_dir)
         
-        print(f"\n✅ Saved experimental plots to: {os.path.abspath(exp_dir)}")
+        print(f"\nSaved experimental plots to: {os.path.abspath(exp_dir)}")
         if args.hnsw_m is not None and args.ef_construction is not None:
             print(f"Filtered plots (if any) saved under: {os.path.abspath(os.path.join(args.out, args.subset_name))}")
     
-    print(f"\n✅ All plots saved to: {os.path.abspath(args.out)}")
+    print(f"\nAll plots saved to: {os.path.abspath(args.out)}")
 
 
 if __name__ == "__main__":

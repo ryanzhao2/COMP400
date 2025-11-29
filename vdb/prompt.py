@@ -228,7 +228,7 @@ def build_tuning_prompt(agent: Any, state: Dict[str, Any], recent_trials: List[D
         f"- min_recall: {agent.thresholds.min_recall} (HARD CONSTRAINT: recall must NOT dip below this)\n"
         f"- max_latency_ms: {agent.thresholds.max_latency_ms} (target to minimize)\n"
         f"- max_memory_gb: {agent.thresholds.max_memory_gb}\n\n"
-        + (f"⚠️ CRITICAL: In latency phase, recall must stay >= {agent.thresholds.min_recall}. Prioritize lower latency while maintaining this constraint.\n\n" if phase == "latency" else "")
+        + (f"In latency phase, recall must stay >= {agent.thresholds.min_recall}. Prioritize lower latency while maintaining this constraint.\n\n" if phase == "latency" else "")
         + "Context:\n"
         f"- Current phase: {phase}\n"
         f"- dataset_size: {state.get('dataset_size')}\n"
