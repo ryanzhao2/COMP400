@@ -58,7 +58,7 @@ class ParamProposerAgent:
 
     def propose(self, state: "OptimizationState") -> Dict[str, int]:
         """Generate parameter proposal based on current state and history."""
-        if self.parent.lc_llm or self.parent.genai_client:
+        if getattr(self.parent, "llm_works", False):
             return self.parent._generate_llm_parameters(state)
         return self.parent._generate_fallback_parameters(state)
 
@@ -91,10 +91,14 @@ class VectorDatabaseAgent:
         database_type: str = "knowledge_reasoning",
     ):
         # LLM init
+        # Ensure .env is loaded (in case it wasn't loaded at module import)
+        load_dotenv()
+        
         self.genai_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
         gemini_key = os.getenv("GEMINI_API_KEY")
         self.lc_llm = None
         self.genai_client = None
+        
         if gemini_key and ChatGoogleGenerativeAI is not None:
             try:
                 if not os.getenv("GOOGLE_API_KEY"):
@@ -103,13 +107,37 @@ class VectorDatabaseAgent:
                     self.lc_llm = ChatGoogleGenerativeAI(model=self.genai_model, temperature=0.1, google_api_key=gemini_key)
                 except Exception:
                     self.lc_llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro", temperature=0.1, google_api_key=gemini_key)
-            except Exception as e:
-                print(f"Warning: Failed to initialize LangChain Gemini: {e}. Will try direct client.")
+            except Exception:
+                pass
+        
         if gemini_key and self.lc_llm is None and genai is not None:
             try:
                 self.genai_client = genai.Client(api_key=gemini_key)
-            except Exception as e:
-                print(f"Warning: Failed to initialize Google GenAI client: {e}. Using heuristic fallback.")
+            except Exception:
+                pass
+        
+        # Test if LLM actually works by making a simple call
+        self.llm_works = False
+        if self.lc_llm is not None and SystemMessage is not None and HumanMessage is not None:
+            try:
+                test_msg = HumanMessage(content='Respond with only: {"test": 1}')
+                test_resp = self.lc_llm.invoke([test_msg])
+                test_content = getattr(test_resp, "content", "")
+                # If we get a response, it works
+                if test_content:
+                    self.llm_works = True
+            except Exception:
+                pass
+        elif self.genai_client is not None:
+            try:
+                test_resp = self.genai_client.models.generate_content(model=self.genai_model, contents="Respond with only: {\"test\": 1}")
+                test_content = getattr(test_resp, "text", "")
+                if test_content:
+                    self.llm_works = True
+            except Exception:
+                pass
+        
+        print(f"LLM initialized: {self.llm_works}")
 
         # Database type-specific configuration
         self.database_type = database_type
@@ -170,8 +198,9 @@ class VectorDatabaseAgent:
         The LLM receives context about past trials, current phase, and performance targets
         to suggest intelligent parameter choices.
         """
-        if not (self.lc_llm or self.genai_client):
+        if not (self.lc_llm or self.genai_client) or not getattr(self, "llm_works", False):
             return self._generate_fallback_parameters(state)
+        
         recent_trials = _prompt_get_recent_trials(dict(state), max(0, int(getattr(self, "llm_history_trials", 5))))
         past_log_trials: List[Dict[str, Any]] = []
         if self.include_past_log_history:
@@ -181,6 +210,7 @@ class VectorDatabaseAgent:
                 past_log_trials = _prompt_load_past(log_path, state.get("dimension"), state.get("dataset_size"), database_type=database_type, limit=5)
             except Exception:
                 past_log_trials = []
+        
         prompt_text = _build_prompt(self, dict(state), recent_trials, past_log_trials)
         try:
             if self.lc_llm is not None and SystemMessage is not None and HumanMessage is not None:
@@ -192,12 +222,17 @@ class VectorDatabaseAgent:
                 assert self.genai_client is not None
                 response = self.genai_client.models.generate_content(model=self.genai_model, contents=prompt_text)
                 content = getattr(response, "text", "")
+            
             try:
                 parsed = json.loads(content)
-            except Exception:
+            except json.JSONDecodeError:
                 start = content.find("{")
                 end = content.rfind("}")
-                parsed = json.loads(content[start:end+1]) if start != -1 and end != -1 else {}
+                if start != -1 and end != -1:
+                    parsed = json.loads(content[start:end+1])
+                else:
+                    raise ValueError(f"Could not find JSON in LLM response")
+            
             params = {
                 "hnsw_m": int(parsed.get("hnsw_m", 16)),
                 "ef_construction": int(parsed.get("ef_construction", 200)),
@@ -310,16 +345,33 @@ class VectorDatabaseAgent:
         """
         import random
         iteration = state["iteration_count"]
+        phase = state.get("phase", "recall")
+        database_type = state.get("database_type") or self.database_type
+        
+        # Use database-type aware defaults
+        if database_type == "knowledge_reasoning":
+            default_m, default_ec, default_es = 32, 400, 200
+        else:  # memory_reaction
+            default_m, default_ec, default_es = 16, 200, 50
+        
         if iteration == 0:
-            hnsw_m, ef_construction, ef_search = 16, 200, 50
+            hnsw_m, ef_construction, ef_search = default_m, default_ec, default_es
         elif iteration == 1:
-            hnsw_m, ef_construction, ef_search = 32, 400, 100
+            # Try different values
+            hnsw_m = min(default_m + 16, self.constraints.hnsw_m_max)
+            ef_construction = min(default_ec + 200, self.constraints.ef_construction_max)
+            ef_search = min(default_es + 100, self.constraints.ef_search_max)
         elif iteration == 2:
-            hnsw_m, ef_construction, ef_search = 8, 100, 20
+            # Try lower values
+            hnsw_m = max(default_m - 8, self.constraints.hnsw_m_min)
+            ef_construction = max(default_ec - 100, self.constraints.ef_construction_min)
+            ef_search = max(default_es - 50, self.constraints.ef_search_min)
         else:
+            # Random search within constraints
             hnsw_m = random.randint(self.constraints.hnsw_m_min, self.constraints.hnsw_m_max)
             ef_construction = random.randint(self.constraints.ef_construction_min, self.constraints.ef_construction_max)
             ef_search = random.randint(self.constraints.ef_search_min, self.constraints.ef_search_max)
+        
         params = {
             "hnsw_m": hnsw_m,
             "ef_construction": ef_construction,
@@ -334,17 +386,20 @@ class VectorDatabaseAgent:
         validated["ef_search"] = max(self.constraints.ef_search_min, min(self.constraints.ef_search_max, params.get("ef_search", 50)))
         return validated
 
-    def _is_better_config(self, current: Dict[str, float], best: Dict[str, float], phase: str = "recall") -> bool:
+    def _is_better_config(self, current: Dict[str, float], best: Dict[str, float], phase: str = "recall", database_type: str = "knowledge_reasoning") -> bool:
         """
         Determine if current config is better than best config based on optimization phase.
         
         Recall phase: Prioritize higher recall, then lower latency as tiebreaker
-        Latency phase: Prioritize lower latency while maintaining minimum recall threshold
+        Latency phase: 
+            - knowledge_reasoning: Prioritize lower latency while maintaining minimum recall threshold
+            - memory_reaction: Prioritize config closest to target recall (0.70) with lowest latency
         
         Args:
             current: Current experiment metrics
             best: Best known metrics so far
             phase: Optimization phase ("recall" or "latency")
+            database_type: Type of database ("knowledge_reasoning" or "memory_reaction")
             
         Returns:
             True if current config should replace best config
@@ -359,7 +414,25 @@ class VectorDatabaseAgent:
         min_recall = self.thresholds.min_recall
         
         if phase == "latency":
-            # In latency phase: prioritize lower latency if recall is acceptable
+            if database_type == "memory_reaction":
+                # For memory_reaction: find config closest to 0.70 recall with lowest latency
+                target_recall = 0.70
+                current_distance = abs(current_recall - target_recall)
+                best_distance = abs(best_recall - target_recall)
+                
+                # Prefer config closer to target recall
+                if current_distance < best_distance:
+                    return True
+                elif current_distance == best_distance:
+                    # Same distance from target - prefer lower latency
+                    if current_latency < best_latency:
+                        return True
+                    elif current_latency == best_latency:
+                        # Same latency - prefer lower memory
+                        return current.get("memory_gb", float("inf")) < best.get("memory_gb", float("inf"))
+                return False
+            else:
+                # For knowledge_reasoning: prioritize lower latency if recall is acceptable
             # Accept if: (recall >= min AND latency is lower) OR (same latency but higher recall >= min)
             if current_recall >= min_recall and best_recall >= min_recall:
                 # Both meet recall target - prioritize latency

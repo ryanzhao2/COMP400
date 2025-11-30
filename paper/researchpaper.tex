@@ -18,14 +18,14 @@
 \maketitle
 
 \begin{abstract}
-Hierarchical Navigable Small World (HNSW) graphs have become the de facto standard for high-performance approximate nearest neighbor search in vector databases. However, optimal HNSW performance requires careful tuning of three critical parameters: graph connectivity (M), construction beam width (efConstruction), and search beam width (efSearch). Manual parameter selection is time-consuming, dataset-dependent, and often suboptimal. This paper presents an \emph{agentic AI system} that autonomously optimizes FAISS HNSW parameters through iterative experimentation and reasoning. Our system employs a language model agent that learns from historical experiments, proposes parameter configurations, and adapts its strategy based on performance feedback. We demonstrate the system's effectiveness across two distinct use cases: a Knowledge + Reasoning database optimized for high recall (0.90+) and a Memory + Reaction database optimized for low latency while maintaining recall around 0.70. Experimental results show that the agent successfully navigates the parameter space, consistently finding acceptable configurations within 5 iterations while reducing manual tuning effort by over 90\%.
+Hierarchical Navigable Small World (HNSW) graphs are widely used for high-performance approximate nearest neighbor search in vector databases, but their performance depends on three coupled parameters (M, efConstruction, efSearch) that are difficult to tune by hand. We present an \emph{agentic AI system} that uses a language model to propose FAISS HNSW configurations, evaluate them, and refine its strategy using logged experiments. The agent supports two workload profiles: a Knowledge + Reasoning database optimized for high recall (target $\geq 0.90$) and a Memory + Reaction database optimized for low latency while maintaining recall around 0.70. On million-vector synthetic datasets, the system reliably finds acceptable configurations for both profiles within a small number of iterations, reducing manual tuning effort by over 90\%.
 \end{abstract}
 
 \section{Introduction}
 
-Vector databases have become essential infrastructure for modern AI applications, enabling efficient similarity search across high-dimensional embeddings for tasks such as retrieval-augmented generation (RAG), recommendation systems, and semantic search. Among various indexing techniques, Hierarchical Navigable Small World (HNSW) graphs~\cite{malkov2018hnsw} have emerged as a leading solution, offering an excellent balance between search accuracy and query latency.
+Vector databases have become essential infrastructure for modern AI applications, enabling efficient similarity search across high-dimensional embeddings for tasks such as retrieval-augmented generation (RAG), recommendation systems, and semantic search. Among various indexing techniques, Hierarchical Navigable Small World (HNSW) graphs~\cite{malkov2018efficientrobustapproximatenearest} have emerged as a leading solution, offering an excellent balance between search accuracy and query latency.
 
-FAISS (Facebook AI Similarity Search)~\cite{johnson2019billion,faiss} provides a high-performance implementation of HNSW, but achieving optimal performance requires careful tuning of three interdependent parameters:
+FAISS (Facebook AI Similarity Search)~\cite{johnson2017billionscalesimilaritysearchgpus,faiss} provides a high-performance implementation of HNSW, but achieving optimal performance requires careful tuning of three interdependent parameters:
 
 \begin{itemize}
     \item \textbf{M (hnsw\_m):} Graph connectivity, controlling the number of outgoing edges per node. Higher values improve recall but increase memory usage and build time.
@@ -39,10 +39,10 @@ This research introduces an \textbf{agentic AI system} that autonomously optimiz
 
 \section{Background and Related Work}
 
-HNSW (Hierarchical Navigable Small World) graphs~\cite{malkov2018hnsw} construct a multi-layer
+HNSW (Hierarchical Navigable Small World) graphs~\cite{malkov2018efficientrobustapproximatenearest} construct a multi-layer
 graph that supports logarithmic-time approximate nearest neighbor search. Their performance is
 highly sensitive to three parameters (M, efConstruction, efSearch), which jointly control recall,
-latency, and memory footprint. FAISS~\cite{johnson2019billion,faiss} provides optimized CPU and
+latency, and memory footprint. FAISS~\cite{johnson2017billionscalesimilaritysearchgpus,faiss} provides optimized CPU and
 GPU implementations of HNSW but offers little guidance on how to tune these parameters for
 particular workloads.
 
@@ -106,27 +106,28 @@ The agent optimized for high recall (target $\geq 0.90$) and achieved excellent 
 multiple optimization runs, the system consistently found configurations that met or exceeded the
 recall target. Representative results include:
 \begin{itemize}
-    \item Configuration $(M=32,\ \text{efConstruction}=800,\ \text{efSearch}=1000)$: True recall@10 of $0.9985$ with latency $0.87$\,ms
-    \item Configuration $(M=32,\ \text{efConstruction}=500,\ \text{efSearch}=800)$: True recall@10 of $0.9925$ with latency $0.65$\,ms
+    \item Configuration $(M=40,\ \text{efConstruction}=2309,\ \text{efSearch}=870)$: True recall@10 of $0.9995$ with latency $0.63$\,ms
+    \item Configuration $(M=32,\ \text{efConstruction}=400,\ \text{efSearch}=200)$: True recall@10 of $0.955$ with latency $0.31$\,ms
     \item Configuration $(M=16,\ \text{efConstruction}=300,\ \text{efSearch}=500)$: True recall@10 of $0.908$ with latency $0.25$\,ms
 \end{itemize}
 These results demonstrate that the agent successfully navigated the parameter space to achieve
-recall values consistently above the $0.90$ target, with the system automatically selecting higher
-connectivity ($M=32$) and aggressive search depths (efSearch $500$--$1000$) when needed to maximize
-recall.
+recall values consistently above the $0.90$ target. The best configuration achieved near-perfect
+recall ($0.9995$) with sub-millisecond latency by automatically selecting higher connectivity
+($M=40$) and balanced search depth (efSearch $870$).
 
 \paragraph{Memory + Reaction Profile}
 The agent optimized for low latency while maintaining recall around $0.70$. The
 system successfully balanced these competing objectives:
 \begin{itemize}
+    \item Configuration $(M=24,\ \text{efConstruction}=200,\ \text{efSearch}=50)$: True recall@10 of $0.691$ with latency $0.065$\,ms
     \item Configuration $(M=16,\ \text{efConstruction}=300,\ \text{efSearch}=100)$: True recall@10 of $0.690$ with latency $0.085$\,ms
     \item Configuration $(M=16,\ \text{efConstruction}=300,\ \text{efSearch}=120)$: True recall@10 of $0.7195$ with latency $0.096$\,ms
-    \item Configuration $(M=16,\ \text{efConstruction}=300,\ \text{efSearch}=88)$: True recall@10 of $0.672$ with latency $0.096$\,ms
 \end{itemize}
 The agent consistently found configurations achieving recall around $0.70$ while maintaining
-sub-millisecond latency, demonstrating effective workload-specific optimization. The system
-automatically selected moderate connectivity ($M=16$) and lower search depths (efSearch $88$ to $120$)
-to prioritize speed while maintaining acceptable accuracy.
+sub-millisecond latency, demonstrating effective workload-specific optimization. The best
+configuration achieved recall of $0.691$ with only $0.065$\,ms latency by selecting moderate
+connectivity ($M=24$) and minimal search depth (efSearch $50$) to prioritize speed while
+maintaining acceptable accuracy.
 
 \subsection{Summary of Workload-Specific Tuning}
 
@@ -138,18 +139,18 @@ the million-scale dataset we evaluated.
 \begin{tabular}{l|c|c|c|c|c}
 \textbf{Workload} & \textbf{Dataset Size} & \textbf{M} & \textbf{efSearch} & \textbf{Recall@10} & \textbf{Latency (ms)}\\
 \hline
-Knowledge + Reasoning & $10^6$ & 32 & 1000 & $0.9985$ (exact) & $0.87$ \\
-Knowledge + Reasoning & $10^6$ & 32 & 800 & $0.9925$ (exact) & $0.65$ \\
+Knowledge + Reasoning & $10^6$ & 40 & 870 & $0.9995$ (exact) & $0.63$ \\
+Knowledge + Reasoning & $10^6$ & 32 & 200 & $0.955$ (exact) & $0.31$ \\
 Knowledge + Reasoning & $10^6$ & 16 & 500 & $0.908$ (exact) & $0.25$ \\
 \hline
-Memory + Reaction & $10^6$ & 16 & 120 & $0.7195$ (exact) & $0.096$ \\
+Memory + Reaction & $10^6$ & 24 & 50 & $0.691$ (exact) & $0.065$ \\
 Memory + Reaction & $10^6$ & 16 & 100 & $0.690$ (exact) & $0.085$ \\
-Memory + Reaction & $10^6$ & 16 & 88 & $0.672$ (exact) & $0.096$ \\
+Memory + Reaction & $10^6$ & 16 & 120 & $0.7195$ (exact) & $0.096$ \\
 \end{tabular}
-\caption{Observed workload-specific performance from experiment logs. All recall values are computed
-using exact brute-force search (IndexFlatL2) for accurate evaluation. The agent successfully
-achieved target recall thresholds: $\geq 0.90$ for Knowledge + Reasoning and around $0.70$ for
-Memory + Reaction.}
+\caption{Best workload-specific configurations from experiment logs. All recall values are computed
+using exact brute-force search (IndexFlatL2) for accurate evaluation. The agent achieved
+$\geq 0.90$ recall for Knowledge + Reasoning (reaching $0.9995$) and recall around $0.70$ for
+Memory + Reaction with sub-millisecond latency ($0.065$\,ms best).}
 \label{tab:workload-results}
 \end{table}
 
@@ -163,43 +164,25 @@ goals, demonstrating effective workload-aware optimization.
 
 \section{Discussion}
 
-This work shows that agentic AI systems can effectively optimize low-level vector database
-parameters by combining structured workflows with LLM-based reasoning. Our design handles a
-multi-objective setting---recall, latency, and memory---through a simple phase-aware strategy and
-lightweight workload profiles, and it demonstrates that the same agent can discover qualitatively
-different configurations for reasoning-oriented versus reaction-oriented databases.
+This work demonstrates that agentic AI systems can effectively optimize low-level vector database
+parameters by combining structured workflows with LLM-based reasoning. Our design addresses the
+multi-objective trade-offs between recall, latency, and memory through a simple phase-aware strategy
+and lightweight workload profiles. The system demonstrates that a single agent can discover
+qualitatively different configurations for reasoning-oriented versus reaction-oriented databases.
 
-The current prototype has limitations: large-scale experiments remain computationally expensive,
-true recall is approximated heuristically for the largest datasets, and exploration is driven by a
-single agent. Future work includes richer exploration strategies (e.g., reinforcement learning or
-multi-agent setups), broader support for other FAISS index types, and tighter integration with GPU
-acceleration and real-time workload monitoring.
+The current prototype has several limitations. Large-scale experiments remain computationally
+expensive, true recall is approximated heuristically for the largest datasets, and exploration is
+driven by a single agent. Future work could explore richer exploration strategies such as
+reinforcement learning or multi-agent setups, broader support for other FAISS index types, and
+tighter integration with GPU acceleration and real-time workload monitoring.
 
 \section{Conclusion}
 
-We presented an agentic AI system for autonomously tuning FAISS HNSW vector database parameters.
-The system combines language model reasoning with iterative experimentation, phase-aware
-optimization, and structured logging to navigate a challenging, multi-objective parameter space.
-Key optimizations including eliminating unnecessary exploration phases, enabling cross-run
-learning from historical experiments, and implementing index reuse allow the system to efficiently
-optimize parameters for large-scale datasets.
+We presented an agentic AI system that autonomously tunes FAISS HNSW vector database parameters using language-model-guided proposals and iterative measurement. By structuring optimization into recall and latency phases and encoding simple workload profiles, the system discovers distinct configurations for Knowledge + Reasoning and Memory + Reaction databases that reflect their different tolerance for latency and recall loss.
 
-Using real measurements on synthetic datasets with $10^6$ vectors, we demonstrated that the agent
-successfully achieves target performance metrics for both workload profiles within 5 iterations. For Knowledge +
-Reasoning databases, the agent consistently found configurations achieving recall@10 values from
-$0.90$ to $0.9985$, exceeding the $0.90$ target by automatically selecting higher connectivity
-($M=32$) and aggressive search depths (efSearch $500$ to $1000$). For Memory + Reaction databases, the
-agent achieved recall@10 around $0.70$, with values ranging from $0.67$ to $0.72$ while optimizing
-for sub-millisecond latency through moderate connectivity ($M=16$) and lower search depths
-(efSearch $88$ to $120$).
+On synthetic datasets with $10^6$ vectors, the agent achieves recall@10 values of at least $0.90$ for Knowledge + Reasoning and around $0.70$ with sub-millisecond latency for Memory + Reaction, typically within 5 iterations. These results show that a lightweight agent, coupled with carefully designed prompts and logging, can approach expert-level tuning without exhaustive search.
 
-These results demonstrate that the agentic system successfully tailors vector database behavior to
-workload-specific goals, achieving target recall thresholds while optimizing for appropriate
-secondary objectives. The framework provides a clear separation of concerns between measurement,
-reasoning, and decision-making, reusable experiment traces for cross-run learning, and a practical
-blueprint for self-optimizing vector databases. This work represents a promising step toward
-agent-driven database systems that continuously adapt their internal configuration in response to
-observed performance and application requirements.
+Beyond the specific numbers, the framework cleanly separates measurement, reasoning, and decision logic, logs experiments for cross-run learning, and provides hooks for extending to other FAISS index types or real-world workloads such as RAG and recommendation. We view this as a practical blueprint for self-optimizing vector databases that adapt to workload requirements and evolve as applications change.
 
 \bibliographystyle{alpha}
 \bibliography{sample}

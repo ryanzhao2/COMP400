@@ -55,7 +55,7 @@ def analyze_dataset_node(agent: Any, state: Any) -> Any:
         if env_dataset_size:
             try:
                 dataset_size = int(env_dataset_size)
-            except Exception:
+        except Exception:
                 dataset_size = db_config.get("dataset_size", 100000)
         else:
             dataset_size = db_config.get("dataset_size", 100000)
@@ -133,8 +133,10 @@ def generate_parameters_node(agent: Any, state: Any) -> Any:
     Uses exploration grid for initial trials, then switches to
     LLM-guided or heuristic parameter generation.
     """
-    print("Generating parameters...")
     exploring = state.get("exploration_count", 0) < getattr(agent, "initial_exploration_trials", 0)
+    llm_works = getattr(agent, "llm_works", False)
+    mode = "exploration" if exploring else ("LLM" if llm_works else "heuristic")
+    print(f"Generating parameters ({mode})...")
     proposed = agent.param_proposer.propose(state) if not exploring else {}
     phase = state.get("phase", "recall")
     constraints = agent.constraints
@@ -150,8 +152,7 @@ def generate_parameters_node(agent: Any, state: Any) -> Any:
         hnsw_m = int(proposed.get("hnsw_m", 16))
         ef_c = int(proposed.get("ef_construction", 200))
         ef_s = int(proposed.get("ef_search", 50))
-    if phase == "latency":
-        ef_s = max(constraints.ef_search_min, int(max(ef_s * 0.8, ef_s - 50)))
+    # Apply constraints (LLM controls parameter selection - no forced reductions)
     hnsw_m = max(constraints.hnsw_m_min, min(constraints.hnsw_m_max, hnsw_m))
     ef_c = max(constraints.ef_construction_min, min(constraints.ef_construction_max, ef_c))
     ef_s = max(constraints.ef_search_min, min(constraints.ef_search_max, ef_s))
@@ -223,7 +224,7 @@ def evaluate_performance_node(agent: Any, state: Any) -> Any:
         dimension = state["dimension"]
         dataset_size = state["dataset_size"]
         
-        # Reuse index from build_index_node if available ]
+        # Reuse index from build_index_node if available
         index = state.get("_index")
         if index is not None:
             build_ms = state.get("_last_build_ms", 0.0)
@@ -346,7 +347,7 @@ def evaluate_exact_recall_node(agent: Any, state: Any) -> Any:
         ann_index = state.get("_index")
         if ann_index is None:
             # Build new index if not already in state
-        ann_index = _create_index(dimension, params["hnsw_m"], params["ef_construction"], params["ef_search"])
+            ann_index = _create_index(dimension, params["hnsw_m"], params["ef_construction"], params["ef_search"])
         ann_index.add(vectors)  # type: ignore
         # If index was reused from state, vectors are already added in build_index_node
         queries = state.get("_queries")
@@ -411,7 +412,8 @@ def update_best_config_node(agent: Any, state: Any) -> Any:
     current_metrics = state["current_metrics"]
     current_params = state["current_params"]
     phase = state.get("phase", "recall")
-    if not state["best_config"] or agent._is_better_config(current_metrics, state["best_config"].get("metrics", {}), phase=phase):
+    database_type = state.get("database_type") or getattr(agent, "database_type", "knowledge_reasoning")
+    if not state["best_config"] or agent._is_better_config(current_metrics, state["best_config"].get("metrics", {}), phase=phase, database_type=database_type):
         state["best_config"] = {
             "params": current_params.copy(),
             "metrics": current_metrics.copy(),

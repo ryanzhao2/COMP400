@@ -210,20 +210,20 @@ def build_tuning_prompt(agent: Any, state: Dict[str, Any], recent_trials: List[D
         if phase == "recall":
             goal = "First, achieve at least 0.90 recall. Once recall >= 0.90, we will switch to optimizing latency."
         else:
-            goal = "Recall target (0.90) is met. Now optimize for LOWEST latency while maintaining recall >= 0.90 (recall must NOT dip below 0.90)."
+            goal = "Recall target (0.90) is met. Now find the configuration with MINIMUM 0.90 recall (must be >= 0.90) and the LOWEST latency. The best configuration is the one with recall >= 0.90 that has the lowest latency. If two configs have the same latency and both meet 0.90, prefer the one with lower memory. To reduce latency, consider lowering ef_search (primary driver of query latency), and potentially reducing hnsw_m and ef_construction if they are higher than necessary for the current recall level."
     else:  # memory_reaction
         if phase == "recall":
             goal = "First, achieve at least 0.70 recall. Once recall >= 0.70, we will switch to optimizing latency."
         else:
-            goal = "Recall target (0.70) is met. Now optimize for LOWEST latency possible, but recall must NOT dip below 0.70. Prioritize speed while maintaining this minimum recall constraint."
+            goal = "Recall target (0.70) is met. Now find the configuration CLOSEST to 0.70 recall (not necessarily above it) with the LOWEST latency. The best configuration minimizes both: (1) distance from 0.70 recall, and (2) latency. If two configs are equally close to 0.70, choose the one with lower latency. To reduce latency, consider lowering ef_search (primary driver of query latency), and potentially reducing hnsw_m and ef_construction if they are higher than necessary."
     
     return (
         f"You are an expert on FAISS HNSW parameter tuning for {db_name}.\n\n"
         f"OPTIMIZATION GOAL: {goal}\n\n"
-        "Constraints:\n"
-        f"- hnsw_m: {agent.constraints.hnsw_m_min}-{agent.constraints.hnsw_m_max}\n"
-        f"- ef_construction: {agent.constraints.ef_construction_min}-{agent.constraints.ef_construction_max}\n"
-        f"- ef_search: {agent.constraints.ef_search_min}-{agent.constraints.ef_search_max}\n\n"
+        "HNSW Parameters (what they control):\n"
+        f"- hnsw_m ({agent.constraints.hnsw_m_min}-{agent.constraints.hnsw_m_max}): Graph connectivity - number of bidirectional links per node. Higher M = better recall but more memory and slower build time. Affects both recall and latency.\n"
+        f"- ef_construction ({agent.constraints.ef_construction_min}-{agent.constraints.ef_construction_max}): Build-time search depth - how many candidates to explore when inserting vectors. Higher ef_construction = better recall but slower index construction. Only affects build time, not query latency.\n"
+        f"- ef_search ({agent.constraints.ef_search_min}-{agent.constraints.ef_search_max}): Query-time search depth - how many candidates to explore during search. Higher ef_search = better recall but MUCH higher query latency. This is the PRIMARY driver of query latency.\n\n"
         "Performance Targets:\n"
         f"- min_recall: {agent.thresholds.min_recall} (HARD CONSTRAINT: recall must NOT dip below this)\n"
         f"- max_latency_ms: {agent.thresholds.max_latency_ms} (target to minimize)\n"

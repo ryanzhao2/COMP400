@@ -56,10 +56,10 @@ DATABASE_TYPES: Dict[str, Dict[str, Any]] = {
             hnsw_m_min=16,  # Higher connectivity improves recall
             hnsw_m_max=128,
             ef_construction_min=200, 
-            ef_construction_max=3000,
+            ef_construction_max=1000,
             # Balanced search depth: good recall without excessive query time
             ef_search_min=200,
-            ef_search_max=3000,
+            ef_search_max=1000,
         ),
     },
     "memory_reaction": {
@@ -76,9 +76,9 @@ DATABASE_TYPES: Dict[str, Dict[str, Any]] = {
             hnsw_m_min=4,  # Lower connectivity for speed
             hnsw_m_max=128,
             ef_construction_min=50,
-            ef_construction_max=3000,
+            ef_construction_max=500,
             ef_search_min=50,
-            ef_search_max=3000,
+            ef_search_max=500,
         ),
     },
 }
