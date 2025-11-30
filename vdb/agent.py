@@ -433,25 +433,25 @@ class VectorDatabaseAgent:
                 return False
             else:
                 # For knowledge_reasoning: prioritize lower latency if recall is acceptable
-            # Accept if: (recall >= min AND latency is lower) OR (same latency but higher recall >= min)
-            if current_recall >= min_recall and best_recall >= min_recall:
-                # Both meet recall target - prioritize latency
-                if current_latency < best_latency:
-                    return True
-                elif current_latency == best_latency:
-                    # Same latency - prefer higher recall or lower memory
-                    if current_recall > best_recall:
+                # Accept if: (recall >= min AND latency is lower) OR (same latency but higher recall >= min)
+                if current_recall >= min_recall and best_recall >= min_recall:
+                    # Both meet recall target - prioritize latency
+                    if current_latency < best_latency:
                         return True
-                    elif current_recall == best_recall:
-                        return current.get("memory_gb", float("inf")) < best.get("memory_gb", float("inf"))
-            elif current_recall >= min_recall:
-                # Current meets target, best doesn't
-                return True
-            elif best_recall < min_recall:
-                # Neither meets target - prefer higher recall
-                return current_recall > best_recall
-            # Best meets target, current doesn't
-            return False
+                    elif current_latency == best_latency:
+                        # Same latency - prefer higher recall or lower memory
+                        if current_recall > best_recall:
+                            return True
+                        elif current_recall == best_recall:
+                            return current.get("memory_gb", float("inf")) < best.get("memory_gb", float("inf"))
+                elif current_recall >= min_recall:
+                    # Current meets target, best doesn't
+                    return True
+                elif best_recall < min_recall:
+                    # Neither meets target - prefer higher recall
+                    return current_recall > best_recall
+                # Best meets target, current doesn't
+                return False
         else:
             # In recall phase: prioritize recall first
             if current_recall > best_recall:

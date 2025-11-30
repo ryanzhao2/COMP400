@@ -55,7 +55,7 @@ def analyze_dataset_node(agent: Any, state: Any) -> Any:
         if env_dataset_size:
             try:
                 dataset_size = int(env_dataset_size)
-        except Exception:
+            except Exception:
                 dataset_size = db_config.get("dataset_size", 100000)
         else:
             dataset_size = db_config.get("dataset_size", 100000)
@@ -231,14 +231,14 @@ def evaluate_performance_node(agent: Any, state: Any) -> Any:
             print(f"Reusing index from build_index_node (saved {build_ms:.1f} ms)")
         else:
             # Fallback: build index here if not already built
-        build_start = time.time()
-        index = _create_index(dimension, params["hnsw_m"], params["ef_construction"], params["ef_search"])
-        vectors = state.get("_vectors")
-        if vectors is None or int(vectors.shape[0]) != dataset_size:
-            vectors = np.random.random((dataset_size, dimension)).astype(np.float32)
-            state["_vectors"] = vectors
-        index.add(vectors)  # type: ignore
-        build_ms = (time.time() - build_start) * 1000.0
+            build_start = time.time()
+            index = _create_index(dimension, params["hnsw_m"], params["ef_construction"], params["ef_search"])
+            vectors = state.get("_vectors")
+            if vectors is None or int(vectors.shape[0]) != dataset_size:
+                vectors = np.random.random((dataset_size, dimension)).astype(np.float32)
+                state["_vectors"] = vectors
+            index.add(vectors)  # type: ignore
+            build_ms = (time.time() - build_start) * 1000.0
             state["_index"] = index
         index_file_path = None
         index_file_bytes = None
@@ -249,12 +249,12 @@ def evaluate_performance_node(agent: Any, state: Any) -> Any:
         except Exception:
             dataset_size_int = dataset_size
         if dataset_size_int <= 1_000_000:
-        try:
-            index_file_path = os.getenv("INDEX_FILE_PATH", os.path.join("data", "hnsw.index"))
-            index_file_bytes = _persist_index(index, index_file_path)
-        except Exception:
-            index_file_path = None
-            index_file_bytes = None
+            try:
+                index_file_path = os.getenv("INDEX_FILE_PATH", os.path.join("data", "hnsw.index"))
+                index_file_bytes = _persist_index(index, index_file_path)
+            except Exception:
+                index_file_path = None
+                index_file_bytes = None
         queries = state.get("_queries")
         if queries is None or int(queries.shape[1]) != dimension:
             num_queries = min(200, dataset_size)
