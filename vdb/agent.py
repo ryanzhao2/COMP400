@@ -433,7 +433,7 @@ class VectorDatabaseAgent:
                 return False
             else:
                 # For knowledge_reasoning: prioritize lower latency if recall is acceptable
-                # Accept if: (recall >= min AND latency is lower) OR (same latency but higher recall >= min)
+            # Accept if: (recall >= min AND latency is lower) OR (same latency but higher recall >= min)
                 if current_recall >= min_recall and best_recall >= min_recall:
                     # Both meet recall target - prioritize latency
                     if current_latency < best_latency:
