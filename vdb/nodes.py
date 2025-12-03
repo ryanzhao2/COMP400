@@ -62,11 +62,11 @@ def analyze_dataset_node(agent: Any, state: Any) -> Any:
         
         dimension = db_config.get("dimension", 128)
         vectors = np.random.random((dataset_size, dimension)).astype(np.float32)
-        queries = np.random.random((min(100, dataset_size), dimension)).astype(np.float32)
+        queries = np.random.random((min(10000, dataset_size), dimension)).astype(np.float32)
     else:
         dataset_size, dimension = int(vectors.shape[0]), int(vectors.shape[1])
         if queries is None:
-            num_q = min(200, dataset_size)
+            num_q = min(10000, dataset_size)
             idx = np.random.choice(dataset_size, size=num_q, replace=False)
             q = vectors[idx].copy()
             q += np.random.normal(0.0, 0.01, size=q.shape).astype(np.float32)
@@ -257,10 +257,12 @@ def evaluate_performance_node(agent: Any, state: Any) -> Any:
                 index_file_bytes = None
         queries = state.get("_queries")
         if queries is None or int(queries.shape[1]) != dimension:
-            num_queries = min(200, dataset_size)
+            num_queries = min(10000, dataset_size)
             queries = np.random.random((num_queries, dimension)).astype(np.float32)
             state["_queries"] = queries
         num_queries = int(queries.shape[0])
+        # Set ef_search before searching (required when reusing index)
+        index.hnsw.efSearch = params["ef_search"]  # type: ignore
         start_time = time.time()
         index.search(queries, k=10)  # type: ignore
         search_time = (time.time() - start_time) * 1000
@@ -302,7 +304,7 @@ def evaluate_exact_recall_node(agent: Any, state: Any) -> Any:
     """
     Compute true recall@k using brute-force exact search.
     
-    For small datasets (<100MB), performs exhaustive search to measure
+    For small datasets (<1GB), performs exhaustive search to measure
     actual recall. For larger datasets, uses heuristic to avoid expensive computation.
     """
     print("Computing exact recall@k...")
@@ -324,7 +326,7 @@ def evaluate_exact_recall_node(agent: Any, state: Any) -> Any:
         total_bytes_est = vector_bytes + graph_bytes_est
         total_size_mb = total_bytes_est / (1024 * 1024)  # Convert to MB
         
-        # For large databases (>100MB), use heuristic instead of brute force
+        # For large databases (>1GB), use heuristic instead of brute force
         if total_size_mb > 1024:
             print(f"Database size ({total_size_mb:.1f} MB) > 100 MB. Using heuristic instead of brute force.")
             # Use the same heuristic as evaluate_performance_node
@@ -348,14 +350,15 @@ def evaluate_exact_recall_node(agent: Any, state: Any) -> Any:
         if ann_index is None:
             # Build new index if not already in state
             ann_index = _create_index(dimension, params["hnsw_m"], params["ef_construction"], params["ef_search"])
-        ann_index.add(vectors)  # type: ignore
+            ann_index.add(vectors)  # type: ignore
         # If index was reused from state, vectors are already added in build_index_node
         queries = state.get("_queries")
         if queries is None or int(queries.shape[1]) != dimension:
-            num_queries = min(200, dataset_size)
+            num_queries = min(10000, dataset_size)
             queries = np.random.random((num_queries, dimension)).astype(np.float32)
             state["_queries"] = queries
         num_queries = int(queries.shape[0])
+        ann_index.hnsw.efSearch = params["ef_search"]  # type: ignore
         _, ann_idx = ann_index.search(queries, k)  # type: ignore
         gt_dist = None
         gt_idx = None

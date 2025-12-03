@@ -50,14 +50,29 @@ def main() -> None:
     print(f"Experiments run: {results['iteration_count']}")
 
     if results.get("best_config"):
+        best_metrics = results['best_config'].get('metrics', {})
+        best_params = results['best_config'].get('params', {})
         print(f"\nBest configuration:")
-        print(f"  HNSW M: {results['best_config']['params']['hnsw_m']}")
-        print(f"  EF Construction: {results['best_config']['params']['ef_construction']}")
-        print(f"  EF Search: {results['best_config']['params']['ef_search']}")
+        print(f"  HNSW M: {best_params.get('hnsw_m', 'N/A')}")
+        print(f"  EF Construction: {best_params.get('ef_construction', 'N/A')}")
+        print(f"  EF Search: {best_params.get('ef_search', 'N/A')}")
         print(f"\nPerformance:")
-        print(f"  Recall: {results['best_config']['metrics']['recall']:.3f}")
-        print(f"  Latency: {results['best_config']['metrics']['latency_ms']:.1f} ms")
-        print(f"  Memory: {results['best_config']['metrics']['memory_gb']:.2f} GB")
+        # Use true_recall if available, otherwise fall back to recall
+        recall = best_metrics.get('true_recall') or best_metrics.get('recall')
+        if recall is not None:
+            print(f"  Recall: {recall:.3f}")
+        else:
+            print(f"  Recall: N/A")
+        latency = best_metrics.get('latency_ms')
+        if latency is not None:
+            print(f"  Latency: {latency:.1f} ms")
+        else:
+            print(f"  Latency: N/A")
+        memory = best_metrics.get('memory_gb')
+        if memory is not None:
+            print(f"  Memory: {memory:.2f} GB")
+        else:
+            print(f"  Memory: N/A")
 
 
 if __name__ == "__main__":
