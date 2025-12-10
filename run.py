@@ -60,19 +60,22 @@ def main() -> None:
         # Use true_recall if available, otherwise fall back to recall
         recall = best_metrics.get('true_recall') or best_metrics.get('recall')
         if recall is not None:
-            print(f"  Recall: {recall:.3f}")
+            print(f"  Recall: {recall:.4f}")
         else:
-            print(f"  Recall: N/A")
+            print("  Recall: N/A")
         latency = best_metrics.get('latency_ms')
         if latency is not None:
-            print(f"  Latency: {latency:.1f} ms")
+            # Use higher precision so very small latencies don't appear as 0.0
+            print(f"  Latency: {latency:.4f} ms")
         else:
-            print(f"  Latency: N/A")
+            print("  Latency: N/A")
         memory = best_metrics.get('memory_gb')
         if memory is not None:
-            print(f"  Memory: {memory:.2f} GB")
+            # Use higher precision so small memory footprints (e.g., 10k vectors)
+            # don't round to 0.00 GB in the summary.
+            print(f"  Memory: {memory:.4f} GB")
         else:
-            print(f"  Memory: N/A")
+            print("  Memory: N/A")
 
 
 if __name__ == "__main__":

@@ -292,7 +292,15 @@ def evaluate_performance_node(agent: Any, state: Any) -> Any:
             "total_size_est": _format_bytes(int(total_bytes_est))
         }
         state["current_metrics"] = metrics
-        print(f"Metrics: Recall={metrics['recall']:.3f}, Latency={metrics['latency_ms']:.1f}ms, Memory={metrics['memory_gb']:.2f}GB")
+        # For small datasets, latency and memory can be well below 1.0, so printing
+        # with only 1–2 decimal places makes them appear as 0.0. Use higher precision
+        # so the CLI output reflects the true non-zero values.
+        print(
+            "Metrics: "
+            f"Recall={metrics['recall']:.3f}, "
+            f"Latency={metrics['latency_ms']:.4f}ms, "
+            f"Memory={metrics['memory_gb']:.4f}GB"
+        )
     except Exception as e:
         print(f"Error evaluating performance: {e}")
         state["error_message"] = f"Performance evaluation failed: {str(e)}"
