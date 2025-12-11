@@ -28,7 +28,7 @@ Vector databases have become essential infrastructure for modern AI applications
 FAISS (Facebook AI Similarity Search)~\cite{johnson2017billionscalesimilaritysearchgpus,faiss} provides a high-performance implementation of HNSW, but achieving optimal performance requires careful tuning of three interdependent parameters:
 
 \begin{itemize}
-    \item \textbf{M :} Graph connectivity, controlling the number of outgoing edges per node. Higher values improve recall but increase memory usage and build time.
+    \item \textbf{M:} Graph connectivity, controlling the number of outgoing edges per node. Higher values improve recall but increase memory usage and build time.
     \item \textbf{efConstruction:} Beam width during index construction. Higher values produce better graph quality and recall, but significantly increase build time.
     \item \textbf{efSearch:} Beam width during query execution. Higher values improve recall but increase query latency.
 \end{itemize}
@@ -40,8 +40,7 @@ This research introduces an \textbf{agentic AI system} that autonomously optimiz
 \section{Background and Related Work}
 
 HNSW (Hierarchical Navigable Small World) graphs~\cite{malkov2018efficientrobustapproximatenearest} construct a multi-layer
-graph that supports logarithmic-time approximate nearest neighbor search. Their performance is
-highly sensitive to three parameters (M, efConstruction, efSearch), which jointly control recall,
+graph that supports logarithmic-time approximate nearest neighbor search. Their performance is dependent on three parameters (M, efConstruction, efSearch), which jointly control recall,
 latency, and memory footprint. FAISS~\cite{johnson2017billionscalesimilaritysearchgpus,faiss} provides optimized CPU and
 GPU implementations of HNSW but offers little guidance on how to tune these parameters for
 particular workloads.
@@ -58,7 +57,7 @@ processes rather than replacing them.
 Our agentic optimization system, implemented using LangGraph, operates as a stateful workflow. At
 each iteration the system (i) analyzes the dataset, (ii) proposes parameters, (iii) builds and
 evaluates an index, and (iv) decides whether and how to continue. Dataset analysis records size
-and dimensionality; parameter generation uses either an LLM or a heuristic fallback; evaluation
+and dimensionality; parameter generation uses an LLM; evaluation
 measures recall, latency, and memory; and decision logic updates the best configuration and stops
 once a maximum number of experiments or performance targets are reached.
 
@@ -92,7 +91,10 @@ Experiments were conducted using:
     \item Synthetic datasets: 1M-vector scale, 128 dimension
     \item Query sets: 10,000 queries per dataset
     \item Evaluation metrics: Recall@10, true recall (brute-force for datasets up to 1M vectors), average query latency (ms per query), memory (GB), index size (MB)
+    \item Optimization procedure: 5 iterations per experiment for each workload profile. We selected five iterations as preliminary experiments showed that performance metrics converged within this range for both workload profiles.
 \end{itemize}
+
+We compute Recall@10 using ground-truth nearest neighbors obtained via brute-force search. Throughout the paper we refer to this quantity as ``true recall'' to distinguish it from proxy estimates.
 
 \subsection{Results on Million-Scale Datasets}
 
@@ -104,30 +106,26 @@ achieved target performance metrics for both workload profiles through iterative
 \paragraph{Knowledge + Reasoning Profile}
 The agent optimized for high recall (target $\geq 0.90$) and achieved excellent results. Across
 multiple optimization runs, the system consistently found configurations that met or exceeded the
-recall target. Representative results include:
+recall target. The following three configurations are representative examples drawn from the 50 experiments (5 iterations each):
+
 \begin{itemize}
-    \item Configuration $(M=40,\ \text{efConstruction}=2309,\ \text{efSearch}=870)$: True recall@10 of $0.9995$ with latency $0.63$\,ms
+    \item Configuration $(M=40,\ \text{efConstruction}=362,\ \text{efSearch}=681)$: True recall@10 of $0.998$ with latency $0.23$\,ms
     \item Configuration $(M=32,\ \text{efConstruction}=400,\ \text{efSearch}=200)$: True recall@10 of $0.955$ with latency $0.31$\,ms
-    \item Configuration $(M=16,\ \text{efConstruction}=300,\ \text{efSearch}=500)$: True recall@10 of $0.908$ with latency $0.25$\,ms
+    \item Configuration $(M=32,\ \text{efConstruction}=425,\ \text{efSearch}=370)$: True recall@10 of $0.901$ with latency $0.14$\,ms
 \end{itemize}
-These results demonstrate that the agent successfully navigated the parameter space to achieve
-recall values consistently above the $0.90$ target. The best configuration achieved near-perfect
-recall ($0.9995$) with sub-millisecond latency by automatically selecting higher connectivity
-($M=40$) and balanced search depth (efSearch $870$).
+These results illustrate that the agent consistently identified configurations surpassing the 0.90 recall requirement for the Knowledge + Reasoning profile. Several runs achieved near-perfect recall with sub-millisecond latency, such as the configuration $(M=40,\ \text{efConstruction}=362,\ \text{efSearch}=681)$, which reflects the agent's tendency to select higher graph connectivity and sufficiently deep search when optimizing for accuracy-oriented workloads.
+
 
 \paragraph{Memory + Reaction Profile}
-The agent optimized for low latency while maintaining recall around $0.70$. The
-system successfully balanced these competing objectives:
+The agent optimized for low latency while maintaining recall around $0.70$. Representative results from our 50 experiments (5 iterations each) include:
+
 \begin{itemize}
     \item Configuration $(M=24,\ \text{efConstruction}=200,\ \text{efSearch}=50)$: True recall@10 of $0.691$ with latency $0.065$\,ms
     \item Configuration $(M=16,\ \text{efConstruction}=300,\ \text{efSearch}=100)$: True recall@10 of $0.690$ with latency $0.085$\,ms
     \item Configuration $(M=16,\ \text{efConstruction}=300,\ \text{efSearch}=120)$: True recall@10 of $0.7195$ with latency $0.096$\,ms
 \end{itemize}
-The agent consistently found configurations achieving recall around $0.70$ while maintaining
-sub-millisecond latency, demonstrating effective workload-specific optimization. The best
-configuration achieved recall of $0.691$ with only $0.065$\,ms latency by selecting moderate
-connectivity ($M=24$) and minimal search depth (efSearch $50$) to prioritize speed while
-maintaining acceptable accuracy.
+The agent also produced configurations that balanced accuracy and speed for the Memory + Reaction profile. For example, the configuration $(M=24,\ \text{efConstruction}=200,\ \text{efSearch}=50)$ achieved a recall of $0.691$ with a latency of $0.065$\,ms, illustrating how the system leverages moderate connectivity and minimal search depth to prioritize responsiveness while maintaining acceptable recall.
+
 
 \subsection{Summary of Workload-Specific Tuning}
 
@@ -136,49 +134,78 @@ the million-scale dataset we evaluated.
 
 \begin{table}[h]
 \centering
-\begin{tabular}{l|c|c|c|c|c}
-\textbf{Workload} & \textbf{Dataset Size} & \textbf{M} & \textbf{efSearch} & \textbf{Recall@10} & \textbf{Latency (ms)}\\
+\begin{tabular}{l|c|c|c}
+\textbf{Workload} & \textbf{Dataset Size} & \textbf{Avg Recall@10} & \textbf{Avg Latency (ms)}\\
 \hline
-Knowledge + Reasoning & $10^6$ & 40 & 870 & $0.9995$ & $0.63$ \\
-Knowledge + Reasoning & $10^6$ & 32 & 200 & $0.955$ & $0.31$ \\
-Knowledge + Reasoning & $10^6$ & 16 & 500 & $0.908$ & $0.25$ \\
-\hline
-Memory + Reaction & $10^6$ & 24 & 50 & $0.691$ & $0.065$ \\
-Memory + Reaction & $10^6$ & 16 & 100 & $0.690$ & $0.085$ \\
-Memory + Reaction & $10^6$ & 16 & 120 & $0.7195$ & $0.096$ \\
+Knowledge + Reasoning & $10^6$ & $0.924$ & $0.313$ \\
+Memory + Reaction & $10^6$ & $0.693$ & $0.073$ \\
 \end{tabular}
-\caption{Best workload-specific configurations from experiment logs. All recall values are computed
-using exact brute-force search (IndexFlatL2) for accurate evaluation. The agent achieved
-$\geq 0.90$ recall for Knowledge + Reasoning (reaching $0.9995$) and recall around $0.70$ for
-Memory + Reaction with sub-millisecond latency ($0.065$\,ms best).}
+\caption{Average recall and latency across 50 experiments (5 iterations each) for both workload profiles on the million-scale dataset.}
 \label{tab:workload-results}
 \end{table}
 
-These results demonstrate that the agentic system successfully achieved its optimization objectives:
-the Knowledge + Reasoning profile consistently exceeded the $0.90$ recall target (reaching up to
-$0.9995$), while the Memory + Reaction profile achieved recall around $0.70$ while
-maintaining sub-millisecond latency. Across 50 optimization runs with 5 iterations per experiment,
-the agent consistently found acceptable configurations, demonstrating efficient convergence. The agent
-automatically selected distinct parameter configurations that align with each workload's qualitative
-goals, demonstrating effective workload-aware optimization.
+The results in Table~\ref{tab:workload-results} illustrate clear and consistent distinctions between the two workload profiles. The Knowledge + Reasoning profile exhibits a strong bias toward high-recall configurations, with many runs approaching near-perfect accuracy. In contrast, the Memory + Reaction profile consistently favors lightweight graph structures and minimal search depth, resulting in sub-millisecond latency while maintaining recall near the 0.70 target. The agent converges reliably across all runs, adapting its parameter choices to the qualitative priorities of each workload rather than gravitating toward a single global optimum. This divergence in selected configurations highlights the system’s ability to internalize and optimize for different operational objectives.
+
+
 
 \section{Discussion}
 
-This work shows that agentic AI systems can effectively optimize low-level vector database parameters by combining structured workflows with LLM-based reasoning. Using a simple phase-aware exploration strategy and lightweight workload profiles, a single agent can navigate trade-offs between recall, latency, and memory, discovering distinct configurations for reasoning-oriented versus reaction-oriented workloads.
+This work demonstrates that agentic systems can guide the tuning of low-level vector database
+parameters by combining structured workflows with LLM-based reasoning. Through a phase-aware
+exploration strategy and lightweight workload profiles, the agent adapts its search behavior to
+different optimization objectives and discovers distinct parameter configurations for reasoning-based
+and reaction-based workloads.
 
-Several limitations remain. Large-scale experiments are computationally expensive, as each evaluation requires constructing an HNSW index and issuing thousands of queries, limiting exhaustive exploration for datasets beyond million scale or for systems requiring frequent re-tuning. A critical challenge arises from the reliance on brute-force exact search (IndexFlatL2) to compute ground-truth neighbors for recall estimation. Although feasible in controlled research settings, this becomes impractical in production environments where datasets may reach tens or hundreds of millions of vectors and where continuous or on-demand tuning is desired. Without access to true recall, the system must depend on approximations that introduce uncertainty. Practical solutions include caching ground truth for stable portions of the dataset, computing recall on representative samples, using high-efSearch configurations as proxy ground truth, or employing learned recall estimators that map observable metrics to recall predictions. These strategies reduce computational cost while maintaining reliable feedback for optimization.
+Several limitations constrain practical deployment. Large-scale experiments remain computationally
+expensive because each iteration requires rebuilding an HNSW index and issuing thousands of queries.
+This restricts the amount of feasible exploration for datasets beyond million scale and for
+applications that require frequent re-tuning. A central bottleneck arises from the cost of computing
+ground-truth neighbors through brute-force search. While this approach is manageable in controlled
+research environments, it becomes prohibitive for datasets with tens or hundreds of millions of
+vectors or for systems that require continuous monitoring and adaptation. Without access to true
+recall, the agent must rely on approximate feedback signals that reduce evaluation accuracy.
 
-Future work could address these limitations along several promising directions. Reinforcement learning (RL) provides a natural extension, enabling an agent to learn policies that map system state (parameter values, performance metrics, history) to updates through repeated optimization episodes. Such policies could internalize exploration and exploitation trade-offs and uncover non-obvious parameter relationships. Additional directions include multi-agent architectures with specialization across optimization tasks, broader FAISS index support (e.g., IVF and product quantization), GPU-accelerated evaluation pipelines, and real-time workload monitoring for continuous adaptation to shifting query patterns.
+Several strategies can help mitigate this limitation. Ground-truth neighbors can be cached for
+stable portions of the dataset. Recall can be estimated using a representative subset of queries.
+High-\texttt{efSearch} configurations can act as proxy ground truth when full brute-force evaluation is
+infeasible. Another direction is the development of learned recall estimators that predict recall
+from inexpensive features of the search process, including distance distributions, candidate list
+behavior, and search depth. These options reduce computational cost while preserving useful
+optimization signals.
+
+Another limitation of this study is the use of synthetic datasets, which provide controlled and
+scalable conditions but do not capture the full variability of real-world embedding distributions.
+In practical applications, vector databases may exhibit domain-specific structure, uneven density,
+or multimodal properties that influence optimal HNSW parameters. Evaluating the agent on text,
+image, or multimodal embeddings would provide a clearer understanding of how well the approach
+generalizes to real-world retrieval workloads.
+   
+Future work may extend the agent framework in several directions. Reinforcement learning could be
+used to learn policies that manage exploration and exploitation more effectively and reveal
+non-obvious parameter interactions. Multi-agent architectures may allow specialization across
+different phases or workloads. Broader FAISS index support, GPU-accelerated evaluation pipelines,
+and real-time workload monitoring present additional opportunities for improving scalability and
+responsiveness in practical systems.
 
 \section{Conclusion}
 
+We developed an agentic optimization framework that tunes FAISS HNSW parameters through iterative
+experimentation guided by language models. By structuring optimization into recall-oriented and
+latency-oriented phases and by defining simple workload profiles, the system identifies effective
+configurations for both Knowledge + Reasoning and Memory + Reaction databases. On million-vector
+datasets, the agent achieves recall of at least $0.90$ for the Knowledge + Reasoning profile and
+sub-millisecond latency with recall near $0.70$ for the Memory + Reaction profile across 50
+experiments with 5 iterations each.
 
+These findings show that even lightweight agentic workflows can improve HNSW parameter
+configurations while adapting to different operational objectives. The modular separation of
+measurement, reasoning, and decision logic supports cross-run learning and makes the framework
+extensible to additional FAISS index types and real-world retrieval workloads.
 
-We presented an agentic AI system that autonomously tunes FAISS HNSW vector database parameters through iterative experimentation guided by language models. By structuring optimization into recall and latency phases with simple workload profiles, the system discovers distinct configurations for Knowledge + Reasoning and Memory + Reaction databases that reflect their different priorities.
-
-On million-vector datasets, the agent achieves recall@10 values of at least $0.90$ for Knowledge + Reasoning and around $0.70$ with sub-millisecond latency for Memory + Reaction, across 50 experiments with 5 iterations each. These results demonstrate that a lightweight agent can approach expert-level tuning without exhaustive search, making automated parameter optimization practical for real-world deployments.
-
-The framework's modular design—separating measurement, reasoning, and decision logic—enables cross-run learning and provides a foundation for extending to other FAISS index types or real-world workloads like RAG and recommendation systems. For production use, the computational cost of ground truth computation can be addressed through strategies such as pre-computed caching, sampling-based evaluation, learned recall estimators, or progressive evaluation that reserves exact computation for final validation. The choice depends on dataset scale, query stability, and accuracy requirements, but these approaches enable production-ready systems that balance optimization quality with computational efficiency.
+Exact ground-truth evaluation remains a practical bottleneck at large scale. Sampling-based
+evaluation, proxy recall estimates, and learned recall predictors provide promising alternatives that
+reduce computational cost while maintaining reliable feedback. Incorporating such methods may allow
+future systems to achieve continuous workload-aware tuning for large and dynamic vector databases.
 
 \bibliographystyle{alpha}
 \bibliography{research}
