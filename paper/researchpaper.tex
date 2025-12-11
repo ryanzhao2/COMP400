@@ -28,7 +28,7 @@ Vector databases have become essential infrastructure for modern AI applications
 FAISS (Facebook AI Similarity Search)~\cite{johnson2017billionscalesimilaritysearchgpus,faiss} provides a high-performance implementation of HNSW, but achieving optimal performance requires careful tuning of three interdependent parameters:
 
 \begin{itemize}
-    \item \textbf{M (hnsw\_m):} Graph connectivity, controlling the number of outgoing edges per node. Higher values improve recall but increase memory usage and build time.
+    \item \textbf{M :} Graph connectivity, controlling the number of outgoing edges per node. Higher values improve recall but increase memory usage and build time.
     \item \textbf{efConstruction:} Beam width during index construction. Higher values produce better graph quality and recall, but significantly increase build time.
     \item \textbf{efSearch:} Beam width during query execution. Higher values improve recall but increase query latency.
 \end{itemize}
@@ -91,7 +91,7 @@ Experiments were conducted using:
     \item FAISS version 1.7.4
     \item Synthetic datasets: 1M-vector scale, 128 dimension
     \item Query sets: 10,000 queries per dataset
-    \item Evaluation metrics: Recall@10, true recall (brute-force for datasets up to 1M vectors), latency (ms), memory (GB), index size (MB)
+    \item Evaluation metrics: Recall@10, true recall (brute-force for datasets up to 1M vectors), average query latency (ms per query), memory (GB), index size (MB)
 \end{itemize}
 
 \subsection{Results on Million-Scale Datasets}
@@ -157,32 +157,28 @@ Memory + Reaction with sub-millisecond latency ($0.065$\,ms best).}
 These results demonstrate that the agentic system successfully achieved its optimization objectives:
 the Knowledge + Reasoning profile consistently exceeded the $0.90$ recall target (reaching up to
 $0.9995$), while the Memory + Reaction profile achieved recall around $0.70$ while
-maintaining sub-millisecond latency. Across all optimization runs, the agent consistently found
-acceptable configurations within 5 iterations, demonstrating efficient convergence. The agent
+maintaining sub-millisecond latency. Across 50 optimization runs with 5 iterations per experiment,
+the agent consistently found acceptable configurations, demonstrating efficient convergence. The agent
 automatically selected distinct parameter configurations that align with each workload's qualitative
 goals, demonstrating effective workload-aware optimization.
 
 \section{Discussion}
 
-This work demonstrates that agentic AI systems can effectively optimize low-level vector database
-parameters by combining structured workflows with LLM-based reasoning. Our design addresses the
-multi-objective trade-offs between recall, latency, and memory through a simple phase-aware strategy
-and lightweight workload profiles. The system demonstrates that a single agent can discover
-qualitatively different configurations for reasoning-oriented versus reaction-oriented databases.
+This work shows that agentic AI systems can effectively optimize low-level vector database parameters by combining structured workflows with LLM-based reasoning. Using a simple phase-aware exploration strategy and lightweight workload profiles, a single agent can navigate trade-offs between recall, latency, and memory, discovering distinct configurations for reasoning-oriented versus reaction-oriented workloads.
 
-The current prototype has several limitations. Large-scale experiments remain computationally
-expensive, true recall is approximated heuristically for the largest datasets, and exploration is
-driven by a single agent. Future work could explore richer exploration strategies such as
-reinforcement learning or multi-agent setups, broader support for other FAISS index types, and
-tighter integration with GPU acceleration and real-time workload monitoring.
+Several limitations remain. Large-scale experiments are computationally expensive, as each evaluation requires constructing an HNSW index and issuing thousands of queries, limiting exhaustive exploration for datasets beyond million scale or for systems requiring frequent re-tuning. A critical challenge arises from the reliance on brute-force exact search (IndexFlatL2) to compute ground-truth neighbors for recall estimation. Although feasible in controlled research settings, this becomes impractical in production environments where datasets may reach tens or hundreds of millions of vectors and where continuous or on-demand tuning is desired. Without access to true recall, the system must depend on approximations that introduce uncertainty. Practical solutions include caching ground truth for stable portions of the dataset, computing recall on representative samples, using high-efSearch configurations as proxy ground truth, or employing learned recall estimators that map observable metrics to recall predictions. These strategies reduce computational cost while maintaining reliable feedback for optimization.
+
+Future work could address these limitations along several promising directions. Reinforcement learning (RL) provides a natural extension, enabling an agent to learn policies that map system state (parameter values, performance metrics, history) to updates through repeated optimization episodes. Such policies could internalize exploration and exploitation trade-offs and uncover non-obvious parameter relationships. Additional directions include multi-agent architectures with specialization across optimization tasks, broader FAISS index support (e.g., IVF and product quantization), GPU-accelerated evaluation pipelines, and real-time workload monitoring for continuous adaptation to shifting query patterns.
 
 \section{Conclusion}
 
-We presented an agentic AI system that autonomously tunes FAISS HNSW vector database parameters using language-model-guided proposals and iterative measurement. By structuring optimization into recall and latency phases and encoding simple workload profiles, the system discovers distinct configurations for Knowledge + Reasoning and Memory + Reaction databases that reflect their different tolerance for latency and recall loss.
 
-On synthetic datasets with $10^6$ vectors, the agent achieves recall@10 values of at least $0.90$ for Knowledge + Reasoning and around $0.70$ with sub-millisecond latency for Memory + Reaction, typically within 5 iterations. These results show that a lightweight agent, coupled with carefully designed prompts and logging, can approach expert-level tuning without exhaustive search.
 
-Beyond the specific numbers, the framework cleanly separates measurement, reasoning, and decision logic, logs experiments for cross-run learning, and provides hooks for extending to other FAISS index types or real-world workloads such as RAG and recommendation. This provides a practical blueprint for self-optimizing vector database systems that adapt to evolving workload requirements.
+We presented an agentic AI system that autonomously tunes FAISS HNSW vector database parameters through iterative experimentation guided by language models. By structuring optimization into recall and latency phases with simple workload profiles, the system discovers distinct configurations for Knowledge + Reasoning and Memory + Reaction databases that reflect their different priorities.
+
+On million-vector datasets, the agent achieves recall@10 values of at least $0.90$ for Knowledge + Reasoning and around $0.70$ with sub-millisecond latency for Memory + Reaction, across 50 experiments with 5 iterations each. These results demonstrate that a lightweight agent can approach expert-level tuning without exhaustive search, making automated parameter optimization practical for real-world deployments.
+
+The framework's modular design—separating measurement, reasoning, and decision logic—enables cross-run learning and provides a foundation for extending to other FAISS index types or real-world workloads like RAG and recommendation systems. For production use, the computational cost of ground truth computation can be addressed through strategies such as pre-computed caching, sampling-based evaluation, learned recall estimators, or progressive evaluation that reserves exact computation for final validation. The choice depends on dataset scale, query stability, and accuracy requirements, but these approaches enable production-ready systems that balance optimization quality with computational efficiency.
 
 \bibliographystyle{alpha}
 \bibliography{research}

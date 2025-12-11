@@ -8,7 +8,7 @@ for both database types, making it easy to compare their characteristics.
 import os
 import json
 import argparse
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -250,6 +250,236 @@ def plot_scatter_comparison(df: pd.DataFrame, out_dir: str) -> None:
         plt.close()
 
 
+def plot_iteration_convergence(df: pd.DataFrame, out_dir: str, max_experiments: int = 50, target_iterations: int = 5, specific_iterations: Optional[List[int]] = None, filename_suffix: str = "") -> None:
+    """Create convergence plots showing recall and latency over iterations.
+    
+    Filters to experiments with exactly target_iterations iterations,
+    selects up to max_experiments such experiments, and plots their
+    convergence curves for both database types.
+    
+    If specific_iterations is provided, only those iterations will be plotted.
+    """
+    recall_col = _pick_recall_col(df)
+    
+    # If specific_iterations is provided, use it; otherwise use target_iterations
+    if specific_iterations is not None:
+        iterations_to_plot = specific_iterations
+        min_iterations_required = len(iterations_to_plot)
+    else:
+        iterations_to_plot = None
+        min_iterations_required = target_iterations
+    
+    # First pass: collect all data to determine global y-axis limits
+    all_recall_data = []
+    all_latency_data = []
+    valid_runs_by_db = {}
+    
+    for db_type in ["knowledge_reasoning", "memory_reaction"]:
+        db_df = df[df["database_type"] == db_type].copy()
+        if db_df.empty:
+            continue
+        
+        # Group by run_id to find experiments with required iterations
+        run_iterations = db_df.groupby("run_id")["iteration"].apply(lambda x: sorted(x.unique().tolist())).reset_index()
+        run_iterations.columns = ["run_id", "iterations_list"]
+        
+        # Filter to runs that have all required iterations
+        if specific_iterations is not None:
+            valid_runs = []
+            for _, row in run_iterations.iterrows():
+                if all(iter_val in row["iterations_list"] for iter_val in specific_iterations):
+                    valid_runs.append(row["run_id"])
+        else:
+            run_iterations["unique_count"] = run_iterations["iterations_list"].apply(len)
+            valid_runs = run_iterations[
+                (run_iterations["unique_count"] == target_iterations)
+            ]["run_id"].tolist()
+        
+        if len(valid_runs) == 0:
+            continue
+        
+        # Select up to max_experiments runs
+        if len(valid_runs) > max_experiments:
+            valid_runs = sorted(valid_runs)[:max_experiments]
+        
+        valid_runs_by_db[db_type] = valid_runs
+        
+        # Filter dataframe to selected runs
+        filtered_df = db_df[db_df["run_id"].isin(valid_runs)].copy()
+        
+        # If specific_iterations is provided, filter to only those iterations
+        if specific_iterations is not None:
+            filtered_df = filtered_df[filtered_df["iteration"].isin(iterations_to_plot)].copy()
+        
+        # Collect all recall and latency data for global limits
+        all_recall_data.extend(filtered_df[recall_col].dropna().tolist())
+        all_latency_data.extend(filtered_df["latency_ms"].dropna().tolist())
+    
+    # Calculate global y-axis limits
+    if all_recall_data:
+        recall_min = min(all_recall_data)
+        recall_max = max(all_recall_data)
+        recall_padding = (recall_max - recall_min) * 0.05  # 5% padding
+        recall_ylim = (max(0, recall_min - recall_padding), recall_max + recall_padding)
+    else:
+        recall_ylim = None
+    
+    if all_latency_data:
+        latency_min = min(all_latency_data)
+        latency_max = max(all_latency_data)
+        latency_padding = (latency_max - latency_min) * 0.05  # 5% padding
+        latency_ylim = (max(0, latency_min - latency_padding), latency_max + latency_padding)
+    else:
+        latency_ylim = None
+    
+    # Second pass: create plots with shared scales
+    for db_type in ["knowledge_reasoning", "memory_reaction"]:
+        if db_type not in valid_runs_by_db:
+            continue
+        
+        db_df = df[df["database_type"] == db_type].copy()
+        if db_df.empty:
+            continue
+        
+        valid_runs = valid_runs_by_db[db_type]
+        
+        if specific_iterations and len(specific_iterations) == 5:
+            iter_desc = "5 iterations per experiment"
+        else:
+            iter_desc = f"iterations {iterations_to_plot}" if specific_iterations else f"{target_iterations} iterations"
+        if len(valid_runs) > max_experiments:
+            print(f"  Selected {max_experiments} out of {len(valid_runs)} experiments for {db_type}")
+        else:
+            print(f"  Using {len(valid_runs)} experiments (all with {iter_desc}) for {db_type}")
+        
+        # Filter dataframe to selected runs
+        filtered_df = db_df[db_df["run_id"].isin(valid_runs)].copy()
+        
+        # If specific_iterations is provided, filter to only those iterations
+        if specific_iterations is not None:
+            filtered_df = filtered_df[filtered_df["iteration"].isin(iterations_to_plot)].copy()
+        
+        # Create figure with two subplots
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+        
+        # Plot 1: Recall over iterations
+        for run_id in valid_runs:
+            run_data = filtered_df[filtered_df["run_id"] == run_id].sort_values("iteration")
+            # Filter to only the iterations we want to plot
+            if specific_iterations is not None:
+                run_data = run_data[run_data["iteration"].isin(iterations_to_plot)].sort_values("iteration")
+            
+            # Remove duplicates if any (keep first occurrence)
+            run_data = run_data.drop_duplicates(subset=["iteration"], keep="first")
+            
+            if len(run_data) >= min_iterations_required:
+                # Only plot if we have consecutive iterations (no gaps that would create vertical lines)
+                iterations = run_data["iteration"].values
+                if len(iterations) > 1 and all(iterations[i+1] - iterations[i] == 1 for i in range(len(iterations)-1)):
+                    axes[0].plot(
+                        run_data["iteration"], 
+                        run_data[recall_col],
+                        alpha=0.3,
+                        linewidth=1,
+                        color="blue" if db_type == "knowledge_reasoning" else "orange"
+                    )
+        
+        # Add mean line (only for iterations we're plotting)
+        mean_recall = filtered_df.groupby("iteration")[recall_col].mean()
+        if specific_iterations is not None:
+            mean_recall = mean_recall[mean_recall.index.isin(iterations_to_plot)].sort_index()
+        
+        axes[0].plot(
+            mean_recall.index,
+            mean_recall.values,
+            linewidth=2.5,
+            color="red",
+            label="Mean",
+            marker="o",
+            markersize=6
+        )
+        
+        # Get actual iteration values from data
+        if specific_iterations is not None:
+            actual_iterations = sorted([i for i in specific_iterations if i in filtered_df["iteration"].unique()])
+        else:
+            actual_iterations = sorted(filtered_df["iteration"].unique())
+        
+        axes[0].set_xlabel("Iteration", fontsize=12)
+        axes[0].set_ylabel("Recall", fontsize=12)
+        if specific_iterations and len(specific_iterations) == 5:
+            iter_desc = "5 iterations per experiment"
+        else:
+            iter_desc = f"iterations {iterations_to_plot}" if specific_iterations else f"{target_iterations} iterations"
+        axes[0].set_title(f"{db_type.replace('_', ' ').title()} - Recall Convergence\n({len(valid_runs)} experiments, {iter_desc})", 
+                         fontsize=12, fontweight="bold")
+        axes[0].set_xticks(actual_iterations)
+        axes[0].grid(True, alpha=0.3)
+        if recall_ylim is not None:
+            axes[0].set_ylim(recall_ylim)
+        axes[0].legend()
+        
+        # Plot 2: Latency over iterations
+        for run_id in valid_runs:
+            run_data = filtered_df[filtered_df["run_id"] == run_id].sort_values("iteration")
+            # Filter to only the iterations we want to plot
+            if specific_iterations is not None:
+                run_data = run_data[run_data["iteration"].isin(iterations_to_plot)].sort_values("iteration")
+            
+            # Remove duplicates if any (keep first occurrence)
+            run_data = run_data.drop_duplicates(subset=["iteration"], keep="first")
+            
+            if len(run_data) >= min_iterations_required:
+                # Only plot if we have consecutive iterations (no gaps that would create vertical lines)
+                iterations = run_data["iteration"].values
+                if len(iterations) > 1 and all(iterations[i+1] - iterations[i] == 1 for i in range(len(iterations)-1)):
+                    axes[1].plot(
+                        run_data["iteration"],
+                        run_data["latency_ms"],
+                        alpha=0.3,
+                        linewidth=1,
+                        color="blue" if db_type == "knowledge_reasoning" else "orange"
+                    )
+        
+        # Add mean line (only for iterations we're plotting)
+        mean_latency = filtered_df.groupby("iteration")["latency_ms"].mean()
+        if specific_iterations is not None:
+            mean_latency = mean_latency[mean_latency.index.isin(iterations_to_plot)].sort_index()
+        
+        axes[1].plot(
+            mean_latency.index,
+            mean_latency.values,
+            linewidth=2.5,
+            color="red",
+            label="Mean",
+            marker="o",
+            markersize=6
+        )
+        
+        axes[1].set_xlabel("Iteration", fontsize=12)
+        axes[1].set_ylabel("Latency (ms)", fontsize=12)
+        if specific_iterations and len(specific_iterations) == 5:
+            iter_desc = "5 iterations per experiment"
+        else:
+            iter_desc = f"iterations {iterations_to_plot}" if specific_iterations else f"{target_iterations} iterations"
+        axes[1].set_title(f"{db_type.replace('_', ' ').title()} - Latency Convergence\n({len(valid_runs)} experiments, {iter_desc})", 
+                         fontsize=12, fontweight="bold")
+        axes[1].set_xticks(actual_iterations)
+        axes[1].grid(True, alpha=0.3)
+        axes[1].set_yscale("linear")  
+        if latency_ylim is not None:
+            axes[1].set_ylim(latency_ylim)
+        axes[1].legend()
+        
+        plt.tight_layout()
+        if filename_suffix:
+            filename = f"convergence_{db_type}_{filename_suffix}.png"
+        else:
+            filename = f"convergence_{db_type}.png"
+        plt.savefig(os.path.join(out_dir, filename), dpi=150, bbox_inches="tight")
+        plt.close()
+
+
 def plot_statistics_summary(df: pd.DataFrame, out_dir: str) -> None:
     """Create a clean summary table with statistics for both database types."""
     recall_col = _pick_recall_col(df)
@@ -349,6 +579,10 @@ def main() -> None:
                        help="Output directory for comparison plots")
     parser.add_argument("--dataset-size", type=int, default=1000000,
                        help="Filter by dataset size (default: 1000000)")
+    parser.add_argument("--max-experiments", type=int, default=50,
+                       help="Maximum number of experiments to show in convergence plots (default: 50)")
+    parser.add_argument("--target-iterations", type=int, default=5,
+                       help="Target number of iterations per experiment (default: 5)")
     args = parser.parse_args()
     
     # Create output directory
@@ -393,6 +627,10 @@ def main() -> None:
     
     plot_statistics_summary(df, args.out)
     print("  Created statistics_summary.png")
+    
+    # Create convergence plots for iterations 0, 1, 2, 3, 4
+    plot_iteration_convergence(df, args.out, max_experiments=args.max_experiments, specific_iterations=[0, 1, 2, 3, 4], filename_suffix="0_1_2_3_4")
+    print("  Created iteration convergence plots for iterations 0, 1, 2, 3, 4 for each database type")
     
     print(f"\nAll comparison plots saved to: {os.path.abspath(args.out)}")
 
