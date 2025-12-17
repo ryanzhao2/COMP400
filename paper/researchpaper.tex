@@ -11,14 +11,14 @@
 \usepackage{graphicx}
 \usepackage[colorlinks=true, allcolors=blue]{hyperref}
 
-\title{Agentic AI for Optimizing FAISS HNSW Vector Database Parameters}
+\title{\textbf{Agentic AI for Tuning FAISS HNSW Vector Database Parameters}}
 \author{Ryan Zhao}
 
 \begin{document}
 \maketitle
 
 \begin{abstract}
-Hierarchical Navigable Small World (HNSW) graphs are widely used for high-performance approximate nearest neighbor search in vector databases, but their performance depends on three coupled parameters (M, efConstruction, efSearch) that are difficult to tune by hand. We present an \emph{agentic AI system} that uses a language model to propose FAISS HNSW configurations, evaluate them, and refine its strategy using logged experiments. The agent supports two workload profiles: a Knowledge + Reasoning database optimized for high recall (target $\geq 0.90$) and a Memory + Reaction database optimized for low latency while maintaining recall around 0.70. On million-vector synthetic datasets, the system reliably finds acceptable configurations for both profiles within a small number of iterations, reducing manual tuning effort significantly.
+Hierarchical Navigable Small World (HNSW) graphs are widely used for high-performance approximate nearest neighbor search in vector databases, but their performance depends on three coupled parameters (M, efConstruction, efSearch) that are difficult to tune by hand. We present an \emph{agentic AI system} that uses a language model to propose FAISS HNSW configurations, evaluate them, and refine its strategy using logged experiments. The agent supports two workload profiles: a Knowledge + Reasoning database optimized for high recall (target $\geq 0.90$) and a Memory + Reaction database optimized for low latency while maintaining recall around $0.70$. On million-vector synthetic datasets, the system reliably finds acceptable configurations for both profiles within a small number of iterations, reducing manual tuning effort significantly.
 \end{abstract}
 
 \section{Introduction}
@@ -77,9 +77,22 @@ acceptability constraints rather than primary objectives.
 The agent uses LLM-guided parameter proposals that learn from both recent trials in the current run
 and historical experiments from past runs. To optimize for expensive
 large-scale experiments, we eliminated the initial exploration phase by default and implemented index
-reuse between evaluation steps, reducing build time by approximately 50\% for million-scale datasets.
+reuse between evaluation steps, reducing build time significantly for million-scale datasets.
 All trials are logged to JSONL files organized by database type and dataset size for cross-run
 learning and analysis.
+
+\subsection{Prompt Template}
+
+The core reasoning capability of our agent is driven by a carefully structured prompt that guides the Large Language Model (LLM) in selecting optimal parameters. The prompt provides the LLM with a clear role, specific optimization goals based on the current phase (recall vs. latency), and a detailed context of the optimization state.
+
+The prompt includes:
+\begin{enumerate}
+    \item \textbf{Role Definition:} Establishes the LLM as an expert on FAISS HNSW tuning.
+    \item \textbf{Optimization Goal:} Explicitly states the target metrics (e.g., "achieve recall $\geq 0.90$") and the current phase strategy.
+    \item \textbf{Parameter Definitions:} Explains the impact of $M$, $efConstruction$, and $efSearch$ on recall, latency, and memory to ground the LLM's reasoning.
+    \item \textbf{Performance Targets:} Lists hard constraints and minimization objectives.
+    \item \textbf{Contextual History:} Provides data on dataset properties, recent trial results, and relevant historical experiments to enable in-context learning.
+\end{enumerate}
 
 \section{Experiments and Results}
 
@@ -135,7 +148,7 @@ the million-scale dataset we evaluated.
 \begin{table}[h]
 \centering
 \begin{tabular}{l|c|c|c}
-\textbf{Workload} & \textbf{Dataset Size} & \textbf{Avg Recall@10} & \textbf{Avg Latency (ms)}\\
+\textbf{Workload} & \textbf{Dataset Size (Vectors)} & \textbf{Avg Recall@10} & \textbf{Avg Latency (ms)}\\
 \hline
 Knowledge + Reasoning & $10^6$ & $0.924$ & $0.313$ \\
 Memory + Reaction & $10^6$ & $0.693$ & $0.073$ \\
