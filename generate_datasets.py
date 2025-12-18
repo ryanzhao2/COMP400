@@ -10,7 +10,7 @@ import argparse
 from typing import Tuple
 import numpy as np
 
-from datasets import (
+from vdb.datasets import (
     generate_gaussian_clusters,
     generate_uniform_sphere,
     generate_powerlaw,

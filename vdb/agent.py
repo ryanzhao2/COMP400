@@ -35,10 +35,9 @@ except Exception:
     HumanMessage = None  # type: ignore
 from langchain_core.messages import SystemMessage, HumanMessage  # type: ignore
 
-from vdb.logging import ArchivistAgent
+from vdb.logging import ArchivistAgent, load_past_log_trials as _prompt_load_past
 from vdb.prompt import (
     get_recent_trials as _prompt_get_recent_trials,
-    load_past_log_trials as _prompt_load_past,
     build_tuning_prompt as _build_prompt,
 )
 from vdb import nodes
@@ -72,10 +71,6 @@ class VectorDatabaseAgent:
     2. Proposes parameters (LLM-guided or heuristic)
     3. Builds and evaluates HNSW indexes
     4. Iteratively improves configuration to meet performance targets
-    
-    The agent supports two optimization modes:
-    - knowledge_reasoning: Prioritizes high recall for thorough retrieval
-    - memory_reaction: Prioritizes low latency for fast response
     """
     def __init__(
         self,

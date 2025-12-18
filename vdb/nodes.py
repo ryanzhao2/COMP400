@@ -17,8 +17,9 @@ import time
 import json
 import numpy as np
 from .hnsw import create_index as _create_index, persist_index as _persist_index
-from .utils import format_bytes as _format_bytes
+from .utils import format_bytes as _format_bytes, calculate_estimated_recall
 from .models import DistanceStats, TrialRecord
+from vdb.datasets import generate_gaussian_clusters, generate_queries
 
 try:
     import faiss  # type: ignore
@@ -61,16 +62,15 @@ def analyze_dataset_node(agent: Any, state: Any) -> Any:
             dataset_size = db_config.get("dataset_size", 100000)
         
         dimension = db_config.get("dimension", 128)
-        vectors = np.random.random((dataset_size, dimension)).astype(np.float32)
-        queries = np.random.random((min(10000, dataset_size), dimension)).astype(np.float32)
+        # Use vdb.datasets generator instead of raw numpy random
+        # Assuming 8 clusters and std 0.1 as defaults, or randomizing slightly
+        vectors = generate_gaussian_clusters(dataset_size, dimension, num_clusters=8, cluster_std=0.1)
+        queries = generate_queries(vectors, num_queries=min(10000, dataset_size))
     else:
         dataset_size, dimension = int(vectors.shape[0]), int(vectors.shape[1])
         if queries is None:
             num_q = min(10000, dataset_size)
-            idx = np.random.choice(dataset_size, size=num_q, replace=False)
-            q = vectors[idx].copy()
-            q += np.random.normal(0.0, 0.01, size=q.shape).astype(np.float32)
-            queries = q.astype(np.float32)
+            queries = generate_queries(vectors, num_queries=num_q)
 
     state["dataset_size"] = dataset_size
     state["dimension"] = dimension
@@ -192,7 +192,8 @@ def build_index_node(agent: Any, state: Any) -> Any:
         index = _create_index(dimension, params["hnsw_m"], params["ef_construction"], params["ef_search"])
         vectors = state.get("_vectors")
         if vectors is None or int(vectors.shape[0]) != dataset_size:
-            vectors = np.random.random((dataset_size, dimension)).astype(np.float32)
+            # Should have been handled in analyze_dataset, but as safeguard:
+            vectors = generate_gaussian_clusters(dataset_size, dimension)
             state["_vectors"] = vectors
         index.add(vectors)  # type: ignore
         build_ms = (time.time() - build_start) * 1000.0
@@ -235,7 +236,7 @@ def evaluate_performance_node(agent: Any, state: Any) -> Any:
             index = _create_index(dimension, params["hnsw_m"], params["ef_construction"], params["ef_search"])
             vectors = state.get("_vectors")
             if vectors is None or int(vectors.shape[0]) != dataset_size:
-                vectors = np.random.random((dataset_size, dimension)).astype(np.float32)
+                vectors = generate_gaussian_clusters(dataset_size, dimension)
                 state["_vectors"] = vectors
             index.add(vectors)  # type: ignore
             build_ms = (time.time() - build_start) * 1000.0
@@ -258,7 +259,9 @@ def evaluate_performance_node(agent: Any, state: Any) -> Any:
         queries = state.get("_queries")
         if queries is None or int(queries.shape[1]) != dimension:
             num_queries = min(10000, dataset_size)
-            queries = np.random.random((num_queries, dimension)).astype(np.float32)
+            # Use generator
+            vectors = state.get("_vectors")
+            queries = generate_queries(vectors, num_queries=num_queries)
             state["_queries"] = queries
         num_queries = int(queries.shape[0])
         # Set ef_search before searching (required when reusing index)
@@ -267,12 +270,10 @@ def evaluate_performance_node(agent: Any, state: Any) -> Any:
         index.search(queries, k=10)  # type: ignore
         search_time = (time.time() - start_time) * 1000
         avg_latency = search_time / num_queries
-        ef_max = max(1, int(agent.constraints.ef_search_max))
-        x = max(0.0, min(1.0, params["ef_search"] / ef_max))
-        slope = 10.0
-        sig = 1.0 / (1.0 + np.exp(-slope * (x - 0.5)))
-        r_min, r_max = 0.6, 0.98
-        estimated_recall = float(r_min + (r_max - r_min) * sig)
+        
+        # Use helper for estimated recall
+        estimated_recall = calculate_estimated_recall(params["ef_search"], agent.constraints.ef_search_max)
+        
         vector_bytes = int(index.ntotal) * int(dimension) * 4
         graph_bytes_est = int(index.ntotal) * int(params["hnsw_m"]) * 4
         total_bytes_est = vector_bytes + graph_bytes_est
@@ -322,7 +323,7 @@ def evaluate_exact_recall_node(agent: Any, state: Any) -> Any:
         # Calculate database size in MB
         vectors = state.get("_vectors")
         if vectors is None or int(vectors.shape[0]) != dataset_size:
-            vectors = np.random.random((dataset_size, dimension)).astype(np.float32)
+            vectors = generate_gaussian_clusters(dataset_size, dimension)
             state["_vectors"] = vectors
         
         # Calculate total size: vectors + graph estimate
@@ -334,13 +335,8 @@ def evaluate_exact_recall_node(agent: Any, state: Any) -> Any:
         # For large databases (>1GB), use heuristic instead of brute force
         if total_size_mb > 1024:
             print(f"Database size ({total_size_mb:.1f} MB) > 100 MB. Using heuristic instead of brute force.")
-            # Use the same heuristic as evaluate_performance_node
-            ef_max = max(1, int(agent.constraints.ef_search_max))
-            x = max(0.0, min(1.0, params["ef_search"] / ef_max))
-            slope = 10.0
-            sig = 1.0 / (1.0 + np.exp(-slope * (x - 0.5)))
-            r_min, r_max = 0.6, 0.98
-            estimated_recall = float(r_min + (r_max - r_min) * sig)
+            # Use helper
+            estimated_recall = calculate_estimated_recall(params["ef_search"], agent.constraints.ef_search_max)
             metrics = state.get("current_metrics", {})
             metrics["true_recall"] = estimated_recall
             metrics["k"] = k
@@ -360,7 +356,7 @@ def evaluate_exact_recall_node(agent: Any, state: Any) -> Any:
         queries = state.get("_queries")
         if queries is None or int(queries.shape[1]) != dimension:
             num_queries = min(10000, dataset_size)
-            queries = np.random.random((num_queries, dimension)).astype(np.float32)
+            queries = generate_queries(vectors, num_queries=num_queries)
             state["_queries"] = queries
         num_queries = int(queries.shape[0])
         ann_index.hnsw.efSearch = params["ef_search"]  # type: ignore
@@ -480,5 +476,3 @@ def decide_next_action_node(agent: Any, state: Any) -> Any:
         return state
     state["status"] = "experimenting"
     return state
-
-
