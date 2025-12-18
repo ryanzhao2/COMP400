@@ -177,12 +177,7 @@ def generate_parameters_node(agent: Any, state: Any) -> Any:
 
 
 def build_index_node(agent: Any, state: Any) -> Any:
-    """
-    Build HNSW index with current parameters.
-    
-    Creates a FAISS HNSW index and measures build time.
-    Stores the index in state for reuse in evaluate_performance_node.
-    """
+
     print("Building index...")
     try:
         params = state["current_params"]

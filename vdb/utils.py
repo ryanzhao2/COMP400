@@ -2,7 +2,7 @@ import math
 
 
 def format_bytes(num: int) -> str:
-    """Format byte count as human-readable string with appropriate units."""
+    # Format bytes into a human-readable string
     try:
         n = float(num)
     except Exception:
@@ -15,11 +15,7 @@ def format_bytes(num: int) -> str:
 
 
 def calculate_estimated_recall(ef_search: int, ef_search_max: int, r_min: float = 0.6, r_max: float = 0.98) -> float:
-    """
-    Estimate recall based on ef_search parameter using a sigmoid function.
-    
-    Used as a fallback when exact recall computation is too expensive (large datasets).
-    """
+    # Estimate recall based on ef_search parameter using a sigmoid function
     ef_max = max(1, int(ef_search_max))
     x = max(0.0, min(1.0, ef_search / ef_max))
     slope = 10.0

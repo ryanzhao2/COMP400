@@ -389,15 +389,6 @@ class VectorDatabaseAgent:
         Latency phase: 
             - knowledge_reasoning: Prioritize lower latency while maintaining minimum recall threshold
             - memory_reaction: Prioritize config closest to target recall (0.70) with lowest latency
-        
-        Args:
-            current: Current experiment metrics
-            best: Best known metrics so far
-            phase: Optimization phase ("recall" or "latency")
-            database_type: Type of database ("knowledge_reasoning" or "memory_reaction")
-            
-        Returns:
-            True if current config should replace best config
         """
         if not best:
             return True
