@@ -41,7 +41,7 @@ This research introduces an \textbf{agentic AI system} that autonomously optimiz
 
 HNSW (Hierarchical Navigable Small World) graphs~\cite{malkov2018efficientrobustapproximatenearest} construct a multi-layer
 graph that supports logarithmic-time approximate nearest neighbor search. Their performance is dependent on three parameters (M, efConstruction, efSearch), which jointly control recall,
-latency, and memory footprint. FAISS~\cite{johnson2017billionscalesimilaritysearchgpus,faiss} provides optimized CPU and
+latency, and memory usage. FAISS~\cite{johnson2017billionscalesimilaritysearchgpus,faiss} provides optimized CPU and
 GPU implementations of HNSW but offers little guidance on how to tune these parameters for
 particular workloads.
 
@@ -56,9 +56,8 @@ processes rather than replacing them.
 
 Our agentic optimization system, implemented using LangGraph, operates as a stateful workflow. At
 each iteration the system (i) analyzes the dataset, (ii) proposes parameters, (iii) builds and
-evaluates an index, and (iv) decides whether and how to continue. Dataset analysis records size
-and dimensionality; parameter generation uses an LLM; evaluation
-measures recall, latency, and memory; and decision logic updates the best configuration and stops
+evaluates an index, and (iv) decides whether and how to continue. Specifically, the system records dataset size
+and dimensionality, generates parameters using an LLM, measures recall, latency, and memory during evaluation, and finally updates the best configuration and stops
 once a maximum number of experiments or performance targets are reached.
 
 The optimization is structured into two phases. In the \emph{recall phase}, the agent explores
@@ -77,18 +76,18 @@ acceptability constraints rather than primary objectives.
 The agent uses LLM-guided parameter proposals that learn from both recent trials in the current run
 and historical experiments from past runs. To optimize for expensive
 large-scale experiments, we eliminated the initial exploration phase by default and implemented index
-reuse between evaluation steps, reducing build time significantly for million-scale datasets.
+reuse between evaluation steps, reducing build time significantly for million-vector datasets.
 All trials are logged to JSONL files organized by database type and dataset size for cross-run
 learning and analysis.
 
-\subsection{Prompt Template}
+\subsection{Prompt Engineering}
 
 The core reasoning capability of our agent is driven by a carefully structured prompt that guides the Large Language Model (LLM) in selecting optimal parameters. The prompt provides the LLM with a clear role, specific optimization goals based on the current phase (recall vs. latency), and a detailed context of the optimization state.
 
 The prompt includes:
 \begin{enumerate}
     \item \textbf{Role Definition:} Establishes the LLM as an expert on FAISS HNSW tuning.
-    \item \textbf{Optimization Goal:} Explicitly states the target metrics (e.g., "achieve recall $\geq 0.90$") and the current phase strategy.
+    \item \textbf{Optimization Goal:} Explicitly states the target metrics (e.g., ``achieve recall $\geq 0.90$'') and the current phase strategy.
     \item \textbf{Parameter Definitions:} Explains the impact of $M$, $efConstruction$, and $efSearch$ on recall, latency, and memory to ground the LLM's reasoning.
     \item \textbf{Performance Targets:} Lists hard constraints and minimization objectives.
     \item \textbf{Contextual History:} Provides data on dataset properties, recent trial results, and relevant historical experiments to enable in-context learning.
@@ -101,7 +100,7 @@ The prompt includes:
 Experiments were conducted using:
 \begin{itemize}
     \item FAISS version 1.7.4
-    \item Synthetic datasets: 1M-vector scale, 128 dimension
+    \item Synthetic datasets: 1M-vector scale, 128 dimensions
     \item Query sets: 10,000 queries per dataset
     \item Evaluation metrics: Recall@10, true recall (brute-force for datasets up to 1M vectors), average query latency (ms per query), memory (GB), index size (MB)
     \item Optimization procedure: 5 iterations per experiment for each workload profile. We selected five iterations as preliminary experiments showed that performance metrics converged within this range for both workload profiles.
@@ -109,7 +108,7 @@ Experiments were conducted using:
 
 We compute Recall@10 using ground-truth nearest neighbors obtained via brute-force search. Throughout the paper we refer to this quantity as ``true recall'' to distinguish it from proxy estimates.
 
-\subsection{Results on Million-Scale Datasets}
+\subsection{Results on Million-Vector Datasets}
 
 We report results on synthetic 128-dimensional datasets with $10^6$ vectors for both
 Knowledge + Reasoning and Memory + Reaction workloads. All metrics are computed using
@@ -135,7 +134,7 @@ The agent optimized for low latency while maintaining recall around $0.70$. Repr
 \begin{itemize}
     \item Configuration $(M=24,\ \text{efConstruction}=200,\ \text{efSearch}=50)$: True recall@10 of $0.691$ with latency $0.065$\,ms
     \item Configuration $(M=16,\ \text{efConstruction}=300,\ \text{efSearch}=100)$: True recall@10 of $0.690$ with latency $0.085$\,ms
-    \item Configuration $(M=16,\ \text{efConstruction}=300,\ \text{efSearch}=120)$: True recall@10 of $0.7195$ with latency $0.096$\,ms
+    \item Configuration $(M=16,\ \text{efConstruction}=300,\ \text{efSearch}=120)$: True recall@10 of $0.720$ with latency $0.096$\,ms
 \end{itemize}
 The agent also produced configurations that balanced accuracy and speed for the Memory + Reaction profile. For example, the configuration $(M=24,\ \text{efConstruction}=200,\ \text{efSearch}=50)$ achieved a recall of $0.691$ with a latency of $0.065$\,ms, illustrating how the system leverages moderate connectivity and minimal search depth to prioritize responsiveness while maintaining acceptable recall.
 
@@ -143,7 +142,7 @@ The agent also produced configurations that balanced accuracy and speed for the 
 \subsection{Summary of Workload-Specific Tuning}
 
 Table~\ref{tab:workload-results} summarizes the key quantitative results for the two workloads on
-the million-scale dataset we evaluated.
+the million-vector dataset we evaluated.
 
 \begin{table}[h]
 \centering
@@ -153,7 +152,7 @@ the million-scale dataset we evaluated.
 Knowledge + Reasoning & $10^6$ & $0.924$ & $0.313$ \\
 Memory + Reaction & $10^6$ & $0.693$ & $0.073$ \\
 \end{tabular}
-\caption{Average recall and latency across 50 experiments (5 iterations each) for both workload profiles on the million-scale dataset.}
+\caption{Average recall and latency across 50 experiments (5 iterations each) for both workload profiles on the million-vector dataset.}
 \label{tab:workload-results}
 \end{table}
 
@@ -169,9 +168,9 @@ exploration strategy and lightweight workload profiles, the agent adapts its sea
 different optimization objectives and discovers distinct parameter configurations for reasoning-based
 and reaction-based workloads.
 
-Several limitations constrain practical deployment. Large-scale experiments remain computationally
+However, several limitations constrain practical deployment. Large-scale experiments remain computationally
 expensive because each iteration requires rebuilding an HNSW index and issuing thousands of queries.
-This restricts the amount of feasible exploration for datasets beyond million scale and for
+This restricts the amount of feasible exploration for datasets exceeding a million vectors and for
 applications that require frequent re-tuning. A central bottleneck arises from the cost of computing
 ground-truth neighbors through brute-force search. While this approach is manageable in controlled
 research environments, it becomes prohibitive for datasets with tens or hundreds of millions of
