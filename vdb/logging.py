@@ -33,7 +33,11 @@ class ArchivistAgent:
                 base_dir = "experiments"
             
             # Create subfolder for database type under experiments/
-            db_subfolder = os.path.join(base_dir, database_type)
+            # Check if base_dir already ends with database_type to avoid nesting experiments/type/type/
+            if os.path.basename(base_dir) == database_type:
+                db_subfolder = base_dir
+            else:
+                db_subfolder = os.path.join(base_dir, database_type)
             
             # Build filename: experiments_n{size}.jsonl (without database_type prefix since it's in subfolder)
             if isinstance(size, int):
