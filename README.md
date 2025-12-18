@@ -1,4 +1,4 @@
-# FAISS HNSW Optimization Agent
+# FAISS HNSW Tuning Agent
 
 Automated tuning of FAISS HNSW parameters using an agentic workflow. This system optimizes index configurations (`M`, `efConstruction`, `efSearch`) for specific recall and latency targets using iterative experimentation.
 
