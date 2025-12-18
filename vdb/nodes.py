@@ -86,12 +86,7 @@ def analyze_dataset_node(agent: Any, state: Any) -> Any:
 
 
 def _get_exploration_grid(agent: Any) -> List[Dict[str, int]]:
-    """
-    Generate a grid of parameter combinations for initial exploration.
-    
-    Creates diverse parameter settings to explore the search space
-    before switching to LLM-guided or focused optimization.
-    """
+    # Get exploration grid for HNSW parameters
     c = agent.constraints
     m_candidates = [c.hnsw_m_min, 16, 32, 48, 64, c.hnsw_m_max]
     m_candidates = sorted({max(c.hnsw_m_min, min(c.hnsw_m_max, v)) for v in m_candidates})

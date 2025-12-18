@@ -4,17 +4,7 @@ from typing import Dict, Any
 
 @dataclass
 class ParameterConstraints:
-    """
-    Constraints for HNSW parameters during optimization.
-    
-    Attributes:
-        hnsw_m_min: Minimum graph connectivity (number of bidirectional links per node)
-        hnsw_m_max: Maximum graph connectivity
-        ef_construction_min: Minimum efConstruction (build-time search depth)
-        ef_construction_max: Maximum efConstruction
-        ef_search_min: Minimum efSearch (query-time search depth)
-        ef_search_max: Maximum efSearch
-    """
+    # Constraints for HNSW parameters during optimization
     hnsw_m_min: int = 4
     hnsw_m_max: int = 16
     ef_construction_min: int = 50
@@ -25,15 +15,8 @@ class ParameterConstraints:
 
 @dataclass
 class PerformanceThresholds:
-    """
-    Performance targets and limits for optimization.
-    
-    Attributes:
-        min_recall: Target minimum recall rate (fraction of correct neighbors retrieved)
-        max_latency_ms: Target maximum query latency in milliseconds
-        max_memory_gb: Target maximum memory usage in gigabytes
-        max_experiments: Maximum number of experiments/trials to run
-    """
+    # Performance targets and limits for optimization
+
     min_recall: float = 0.9
     max_latency_ms: float = 10.0
     max_memory_gb: float = 1.0
@@ -85,15 +68,7 @@ DATABASE_TYPES: Dict[str, Dict[str, Any]] = {
 
 
 def get_database_config(db_type: str) -> Dict[str, Any]:
-    """
-    Get database type-specific configuration preset.
-    
-    Args:
-        db_type: Database type identifier ("knowledge_reasoning" or "memory_reaction")
-        
-    Returns:
-        Configuration dictionary with thresholds, constraints, and defaults
-    """
+    # Get database type-specific configuration preset
     return DATABASE_TYPES.get(db_type, DATABASE_TYPES["knowledge_reasoning"])
 
 
