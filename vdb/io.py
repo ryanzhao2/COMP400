@@ -11,7 +11,7 @@ import json
 
 
 def graph_data_to_dict(graph: GraphData) -> Dict[str, Any]:
-    """Convert GraphData object to JSON-serializable dictionary."""
+    # Convert GraphData object to JSON-serializable dictionary
     return {
         "dataset_size": graph.dataset_size,
         "dimension": graph.dimension,
