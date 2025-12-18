@@ -1,11 +1,3 @@
-"""
-LangGraph state definition for optimization workflow.
-
-Defines OptimizationState TypedDict that flows through all workflow nodes,
-carrying dataset info, current/best configurations, trial history, and
-internal cached data.
-"""
-
 from typing import TypedDict, Dict, Any, Optional, List
 
 

@@ -46,6 +46,9 @@ data/*.index
 *.blg
 *.toc
 
+paper/
+data/
+
 # Plots (regenerate as needed)
 # plots/**/*.png
 

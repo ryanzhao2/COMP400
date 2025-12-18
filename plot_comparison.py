@@ -16,7 +16,33 @@ import seaborn as sns
 import numpy as np
 from matplotlib.ticker import MaxNLocator
 
-# Use the same loading function from plot_experiments.py
+def filter_experiments(df: pd.DataFrame, target_iterations: int = 5, max_experiments: int = 50) -> pd.DataFrame:
+    """Filter to keep only max_experiments with exactly target_iterations."""
+    filtered_dfs = []
+    
+    for db_type in ["knowledge_reasoning", "memory_reaction"]:
+        db_df = df[df["database_type"] == db_type].copy()
+        if db_df.empty:
+            continue
+            
+        # Group by run_id to count iterations
+        # Check if run has exactly the target iterations (0 to target_iterations-1)
+        run_counts = db_df.groupby("run_id")["iteration"].nunique()
+        valid_runs = run_counts[run_counts == target_iterations].index.tolist()
+        
+
+        if len(valid_runs) > max_experiments:
+            valid_runs = sorted(valid_runs)[:max_experiments]
+            
+        # Keep only selected runs
+        filtered_dfs.append(db_df[db_df["run_id"].isin(valid_runs)])
+        
+    if not filtered_dfs:
+        return pd.DataFrame()
+        
+    return pd.concat(filtered_dfs)
+
+
 def load_experiments(log_path: str) -> pd.DataFrame:
     records: List[Dict[str, Any]] = []
     with open(log_path, "r", encoding="utf-8") as f:
@@ -101,6 +127,9 @@ def plot_recall_comparison(df: pd.DataFrame, out_dir: str) -> None:
         recall_data = db_df[recall_col].dropna()
         if len(recall_data) == 0:
             continue
+            
+        n_experiments = db_df["run_id"].nunique()
+        iterations_per_exp = db_df.groupby("run_id")["iteration"].nunique().mode()[0] if not db_df.empty else 0
         
         plt.figure(figsize=(8, 6))
         plt.hist(recall_data, bins=20, alpha=0.7, edgecolor="black")
@@ -111,7 +140,7 @@ def plot_recall_comparison(df: pd.DataFrame, out_dir: str) -> None:
         
         plt.xlabel("Recall", fontsize=12)
         plt.ylabel("Frequency", fontsize=12)
-        plt.title(f"{db_type.replace('_', ' ').title()} - Recall Distribution\n(n={len(recall_data)} experiments)", 
+        plt.title(f"{db_type.replace('_', ' ').title()} - Recall Distribution\n({n_experiments} experiments, {iterations_per_exp} iterations each)", 
                  fontsize=14, fontweight="bold")
         plt.legend()
         plt.grid(True, alpha=0.3)
@@ -127,8 +156,11 @@ def plot_recall_comparison(df: pd.DataFrame, out_dir: str) -> None:
         plt.gca().yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{int(x)}'))
         plt.tight_layout()
         
-        filename = f"recall_{db_type}.png"
-        plt.savefig(os.path.join(out_dir, filename), dpi=150)
+        # Save to subfolder
+        db_out_dir = os.path.join(out_dir, db_type)
+        os.makedirs(db_out_dir, exist_ok=True)
+        filename = "recall_distribution.png"
+        plt.savefig(os.path.join(db_out_dir, filename), dpi=150)
         plt.close()
 
 
@@ -142,6 +174,9 @@ def plot_latency_comparison(df: pd.DataFrame, out_dir: str) -> None:
         latency_data = db_df["latency_ms"].dropna()
         if len(latency_data) == 0:
             continue
+            
+        n_experiments = db_df["run_id"].nunique()
+        iterations_per_exp = db_df.groupby("run_id")["iteration"].nunique().mode()[0] if not db_df.empty else 0
         
         plt.figure(figsize=(8, 6))
         plt.hist(latency_data, bins=30, alpha=0.7, edgecolor="black")
@@ -152,7 +187,7 @@ def plot_latency_comparison(df: pd.DataFrame, out_dir: str) -> None:
         
         plt.xlabel("Latency (ms)", fontsize=12)
         plt.ylabel("Frequency", fontsize=12)
-        plt.title(f"{db_type.replace('_', ' ').title()} - Latency Distribution\n(n={len(latency_data)} experiments)", 
+        plt.title(f"{db_type.replace('_', ' ').title()} - Latency Distribution\n({n_experiments} experiments, {iterations_per_exp} iterations each)", 
                  fontsize=14, fontweight="bold")
         plt.legend()
         plt.grid(True, alpha=0.3)
@@ -169,8 +204,11 @@ def plot_latency_comparison(df: pd.DataFrame, out_dir: str) -> None:
         plt.gca().yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{int(x)}'))
         plt.tight_layout()
         
-        filename = f"latency_{db_type}.png"
-        plt.savefig(os.path.join(out_dir, filename), dpi=150)
+        # Save to subfolder
+        db_out_dir = os.path.join(out_dir, db_type)
+        os.makedirs(db_out_dir, exist_ok=True)
+        filename = "latency_distribution.png"
+        plt.savefig(os.path.join(db_out_dir, filename), dpi=150)
         plt.close()
 
 
@@ -182,6 +220,9 @@ def plot_boxplot_comparison(df: pd.DataFrame, out_dir: str) -> None:
         db_df = df[df["database_type"] == db_type].copy()
         if db_df.empty:
             continue
+        
+        n_experiments = db_df["run_id"].nunique()
+        iterations_per_exp = db_df.groupby("run_id")["iteration"].nunique().mode()[0] if not db_df.empty else 0
         
         fig, axes = plt.subplots(1, 2, figsize=(12, 5))
         
@@ -202,12 +243,15 @@ def plot_boxplot_comparison(df: pd.DataFrame, out_dir: str) -> None:
             axes[1].set_yscale("log")
             axes[1].grid(True, alpha=0.3, axis="y")
         
-        plt.suptitle(f"{db_type.replace('_', ' ').title()} - Distribution Analysis", 
+        plt.suptitle(f"{db_type.replace('_', ' ').title()} - Distribution Analysis\n({n_experiments} experiments, {iterations_per_exp} iterations each)", 
                     fontsize=14, fontweight="bold", y=1.02)
         plt.tight_layout()
         
-        filename = f"boxplot_{db_type}.png"
-        plt.savefig(os.path.join(out_dir, filename), dpi=150)
+        # Save to subfolder
+        db_out_dir = os.path.join(out_dir, db_type)
+        os.makedirs(db_out_dir, exist_ok=True)
+        filename = "boxplot_distribution.png"
+        plt.savefig(os.path.join(db_out_dir, filename), dpi=150)
         plt.close()
 
 
@@ -223,6 +267,9 @@ def plot_scatter_comparison(df: pd.DataFrame, out_dir: str) -> None:
         scatter_df = db_df.dropna(subset=[recall_col, "latency_ms"])
         if len(scatter_df) == 0:
             continue
+            
+        n_experiments = db_df["run_id"].nunique()
+        iterations_per_exp = db_df.groupby("run_id")["iteration"].nunique().mode()[0] if not db_df.empty else 0
         
         plt.figure(figsize=(8, 6))
         scatter = plt.scatter(scatter_df["latency_ms"], scatter_df[recall_col], 
@@ -231,7 +278,7 @@ def plot_scatter_comparison(df: pd.DataFrame, out_dir: str) -> None:
         
         plt.xlabel("Latency (ms)", fontsize=12)
         plt.ylabel("Recall" if recall_col == "true_recall" else "Recall (estimated)", fontsize=12)
-        plt.title(f"{db_type.replace('_', ' ').title()} - Recall vs Latency\n(n={len(scatter_df)} experiments)", 
+        plt.title(f"{db_type.replace('_', ' ').title()} - Recall vs Latency\n({n_experiments} experiments, {iterations_per_exp} iterations each)", 
                  fontsize=14, fontweight="bold")
         plt.grid(True, alpha=0.3)
         
@@ -245,8 +292,11 @@ def plot_scatter_comparison(df: pd.DataFrame, out_dir: str) -> None:
         
         plt.tight_layout()
         
-        filename = f"scatter_{db_type}.png"
-        plt.savefig(os.path.join(out_dir, filename), dpi=150)
+        # Save to subfolder
+        db_out_dir = os.path.join(out_dir, db_type)
+        os.makedirs(db_out_dir, exist_ok=True)
+        filename = "scatter_recall_latency.png"
+        plt.savefig(os.path.join(db_out_dir, filename), dpi=150)
         plt.close()
 
 
@@ -473,10 +523,13 @@ def plot_iteration_convergence(df: pd.DataFrame, out_dir: str, max_experiments: 
         
         plt.tight_layout()
         if filename_suffix:
-            filename = f"convergence_{db_type}_{filename_suffix}.png"
+            filename = f"convergence_{filename_suffix}.png"
         else:
-            filename = f"convergence_{db_type}.png"
-        plt.savefig(os.path.join(out_dir, filename), dpi=150, bbox_inches="tight")
+            filename = f"convergence.png"
+            
+        db_out_dir = os.path.join(out_dir, db_type)
+        os.makedirs(db_out_dir, exist_ok=True)
+        plt.savefig(os.path.join(db_out_dir, filename), dpi=150, bbox_inches="tight")
         plt.close()
 
 
@@ -567,7 +620,11 @@ def plot_statistics_summary(df: pd.DataFrame, out_dir: str) -> None:
     
     plt.suptitle("Performance Statistics Summary", fontsize=16, fontweight="bold", y=1.02)
     plt.tight_layout()
-    plt.savefig(os.path.join(out_dir, "statistics_summary.png"), dpi=150, bbox_inches="tight")
+    
+    # Save to comparison subfolder
+    comp_dir = os.path.join(out_dir, "comparison")
+    os.makedirs(comp_dir, exist_ok=True)
+    plt.savefig(os.path.join(comp_dir, "statistics_summary.png"), dpi=150, bbox_inches="tight")
     plt.close()
 
 
@@ -575,7 +632,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Generate comparison plots between database types")
     parser.add_argument("--experiments", default="experiments", 
                        help="Path to experiments directory")
-    parser.add_argument("--out", default="plots/comparison", 
+    parser.add_argument("--out", default="plots", 
                        help="Output directory for comparison plots")
     parser.add_argument("--dataset-size", type=int, default=1000000,
                        help="Filter by dataset size (default: 1000000)")
@@ -605,11 +662,19 @@ def main() -> None:
         print(f"No experiments found with dataset_size = {args.dataset_size}")
         return
     
-    print(f"Loaded {len(df)} total experiments")
+    # Filter to specific number of experiments with specific iterations
+    print(f"Filtering to {args.max_experiments} experiments with {args.target_iterations} iterations each...")
+    df = filter_experiments(df, args.target_iterations, args.max_experiments)
+    
+    if df.empty:
+        print("No experiments matched the filtering criteria.")
+        return
+
+    print(f"Working with {len(df)} total records after filtering")
     for db_type in ["knowledge_reasoning", "memory_reaction"]:
         db_df = df[df["database_type"] == db_type]
         if not db_df.empty:
-            print(f"  {db_type}: {len(db_df)} experiments")
+            print(f"  {db_type}: {db_df['run_id'].nunique()} experiments ({len(db_df)} records)")
     
     # Generate comparison plots
     print("\nGenerating comparison plots...")
@@ -628,9 +693,14 @@ def main() -> None:
     plot_statistics_summary(df, args.out)
     print("  Created statistics_summary.png")
     
-    # Create convergence plots for iterations 0, 1, 2, 3, 4
-    plot_iteration_convergence(df, args.out, max_experiments=args.max_experiments, specific_iterations=[0, 1, 2, 3, 4], filename_suffix="0_1_2_3_4")
-    print("  Created iteration convergence plots for iterations 0, 1, 2, 3, 4 for each database type")
+    # Create convergence plots - reuse the filtered dataframe
+    # We pass None for specific_iterations to rely on the already filtered data's iterations
+    # But plot_iteration_convergence expects specific_iterations for the x-axis or logic
+    # We can pass the range(target_iterations)
+    plot_iteration_convergence(df, args.out, max_experiments=args.max_experiments, 
+                             specific_iterations=list(range(args.target_iterations)), 
+                             target_iterations=args.target_iterations)
+    print(f"  Created iteration convergence plots for iterations {list(range(args.target_iterations))} for each database type")
     
     print(f"\nAll comparison plots saved to: {os.path.abspath(args.out)}")
 

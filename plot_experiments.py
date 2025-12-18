@@ -298,7 +298,7 @@ def main() -> None:
                 continue
             
             # Create subfolder for this database type
-            db_dir = os.path.join(args.out, db_type, "experimental")
+            db_dir = os.path.join(args.out, "comparison")
             ensure_out_dir(db_dir)
             
             print(f"\n  Generating plots for '{db_type}' ({len(db_df)} records)...")
@@ -330,7 +330,7 @@ def main() -> None:
             print(f"  Saved plots for '{db_type}' to: {os.path.abspath(db_dir)}")
     else:
         # Fallback: if no database_type, save to experimental folder (backward compatibility)
-        exp_dir = os.path.join(args.out, "experimental")
+        exp_dir = os.path.join(args.out, "comparison")
         ensure_out_dir(exp_dir)
         print("\nNo database_type found, saving to experimental/ folder")
         plot_recall_latency(df, exp_dir)

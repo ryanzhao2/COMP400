@@ -1,18 +1,12 @@
 """
-CLI entrypoint for HNSW parameter optimization.
-
 Runs the VectorDatabaseAgent to automatically tune FAISS HNSW parameters,
 logging all experiments for analysis and visualization.
 
-Usage examples:
-  # Basic run with synthetic data
-  python run.py --iterations 20 --database-type knowledge_reasoning
-  
-  # Run with custom dataset
-  python run.py --iterations 20 \
-    --dataset-vectors data/gaussian_n100000_d128_k8_std0.1.npy \
-    --dataset-queries data/gaussian_n100000_d128_k8_std0.1_queries.npy \
-    --database-type memory_reaction
+# Run with custom dataset
+python run.py --iterations 20 \
+--dataset-vectors data/gaussian_n100000_d128_k8_std0.1.npy \
+--dataset-queries data/gaussian_n100000_d128_k8_std0.1_queries.npy \
+--database-type memory_reaction
 """
 
 import os
@@ -22,7 +16,7 @@ from vdb.agent import VectorDatabaseAgent
 
 
 def main() -> None:
-    """Parse CLI arguments and run the optimization loop."""
+    # Parse CLI arguments and run the optimization loop
     from vdb.config import DATABASE_TYPES
     
     parser = argparse.ArgumentParser(description="Run HNSW optimization experiments and log results.")
@@ -65,14 +59,11 @@ def main() -> None:
             print("  Recall: N/A")
         latency = best_metrics.get('latency_ms')
         if latency is not None:
-            # Use higher precision so very small latencies don't appear as 0.0
             print(f"  Latency: {latency:.4f} ms")
         else:
             print("  Latency: N/A")
         memory = best_metrics.get('memory_gb')
         if memory is not None:
-            # Use higher precision so small memory footprints (e.g., 10k vectors)
-            # don't round to 0.00 GB in the summary.
             print(f"  Memory: {memory:.4f} GB")
         else:
             print("  Memory: N/A")

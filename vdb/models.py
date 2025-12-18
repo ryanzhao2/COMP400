@@ -1,12 +1,3 @@
-"""
-Data models for optimization state and results.
-
-Defines dataclasses for:
-- DistanceStats: Statistical summaries of vector distances
-- TrialRecord: Single experiment with parameters and metrics
-- GraphData: Collection of trials for LLM-based recommendations
-"""
-
 from dataclasses import dataclass
 from typing import Dict, List
 

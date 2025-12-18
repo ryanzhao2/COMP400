@@ -1,13 +1,3 @@
-"""
-Prompt engineering utilities for LLM-guided parameter tuning.
-
-Constructs prompts that provide the LLM with:
-- Recent trial history from current run
-- Past trial history from log files
-- Performance targets and constraints
-- Current optimization phase and goals
-"""
-
 from typing import Any, Dict, List, Optional
 import os
 import json

@@ -292,9 +292,6 @@ def evaluate_performance_node(agent: Any, state: Any) -> Any:
             "total_size_est": _format_bytes(int(total_bytes_est))
         }
         state["current_metrics"] = metrics
-        # For small datasets, latency and memory can be well below 1.0, so printing
-        # with only 1–2 decimal places makes them appear as 0.0. Use higher precision
-        # so the CLI output reflects the true non-zero values.
         print(
             "Metrics: "
             f"Recall={metrics['recall']:.3f}, "
@@ -398,9 +395,6 @@ def evaluate_exact_recall_node(agent: Any, state: Any) -> Any:
             recalls.append(inter / k)
         true_recall = float(np.mean(recalls))
         metrics = state.get("current_metrics", {})
-        # For smaller datasets where we can afford exact search, treat true_recall
-        # as the primary recall metric so that logs and downstream analysis reflect
-        # actual accuracy rather than the heuristic estimate.
         metrics["true_recall"] = true_recall
         metrics["recall"] = true_recall
         metrics["k"] = k
