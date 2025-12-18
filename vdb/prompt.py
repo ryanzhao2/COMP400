@@ -3,7 +3,7 @@ import json
 
 
 def get_recent_trials(state: Dict[str, Any], n: int) -> List[Dict[str, Any]]:
-    """Extract last n trials from current optimization state."""
+    # Extract last n trials from current optimization state
     trials_src = state.get("experiment_history", [])
     if not trials_src or n <= 0:
         return []
